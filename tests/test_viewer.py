@@ -17,8 +17,9 @@ BROWSER = 777
 class FakeControl:
     """Records every control call in order instead of touching the real desktop."""
 
-    def __init__(self, browser=BROWSER, origin=(100, 200), fail_origin=False):
+    def __init__(self, browser=BROWSER, origin=(100, 200), fail_origin=False, front_ok=True):
         self.calls = []
+        self.front_ok = front_ok
         self.browser = browser
         self.origin = origin
         self.fail_origin = fail_origin
@@ -36,7 +37,7 @@ class FakeControl:
 
     def bring_to_front(self, hwnd):
         self.calls.append(("bring_to_front", hwnd))
-        return True
+        return self.front_ok
 
     def window_origin(self, hwnd):
         self.calls.append(("window_origin", hwnd))
@@ -114,6 +115,14 @@ def test_failed_click_still_restores_cursor_and_browser(viewer, control):
         viewer.perform_click("c2", 10, 20, False)
     assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
     assert not any(call[0] == "click" for call in control.calls)
+
+
+def test_click_is_skipped_when_the_target_cannot_be_brought_to_front(viewer, control):
+    control.front_ok = False
+    with pytest.raises(CaptureError, match="前面に出せませんでした"):
+        viewer.perform_click("c2", 10, 20, False)
+    assert not any(call[0] == "click" for call in control.calls)
+    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
 
 
 def test_click_outside_the_image_is_rejected(viewer, control):
@@ -243,3 +252,39 @@ def test_publish_reaches_an_open_tab_that_acknowledges(viewer):
     assert received[0]["captureId"] == "c2"
     assert received[0]["html"] == '<div class="box"></div>'
     assert (received[0]["width"], received[0]["height"]) == (800, 600)
+
+
+# --- malformed requests ----------------------------------------------------------------------
+
+
+def test_non_ascii_query_token_is_forbidden_not_a_dropped_connection(viewer):
+    viewer.ensure_started()
+    status, _, _ = get(viewer, "/", token="%E3%81%82")
+    assert status == 403
+
+
+def test_non_ascii_header_token_is_forbidden(viewer, control):
+    viewer.ensure_started()
+    body = {"captureId": "c2", "x": 10, "y": 20, "double": False}
+    assert post(viewer, "/click", body, token="é")[0] == 403
+    assert control.calls == []
+
+
+def test_invalid_content_length_is_a_bad_request(viewer):
+    viewer.ensure_started()
+    connection = http.client.HTTPConnection("127.0.0.1", int(viewer.origin.rsplit(":", 1)[1]), timeout=5)
+    try:
+        connection.putrequest("POST", "/ack")
+        connection.putheader("Content-Length", "abc")
+        connection.putheader("Origin", viewer.origin)
+        connection.putheader(TOKEN_HEADER, viewer.token)
+        connection.endheaders()
+        assert connection.getresponse().status == 400
+    finally:
+        connection.close()
+
+
+def test_ack_with_a_malformed_body_is_a_bad_request(viewer):
+    viewer.ensure_started()
+    assert post(viewer, "/ack", [1])[0] == 400
+    assert post(viewer, "/ack", {"version": "x"})[0] == 400

@@ -26,6 +26,17 @@ MAX_BODY_BYTES = 1024
 TOKEN_HEADER = "X-AI-Desktop-Token"
 
 
+def _token_matches(candidate: str, token: str) -> bool:
+    return secrets.compare_digest(candidate.encode("utf-8"), token.encode("utf-8"))
+
+
+class _ViewerServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:  # noqa: ANN001 - stdlib signature
+        _log.exception("viewer request from %s failed", client_address)
+
+
 class Viewer:
     """Serves the current view to browser tabs over SSE and performs clicks sent back from them.
 
@@ -63,8 +74,7 @@ class Viewer:
         with self._changed:
             if self._server is not None:
                 return
-            server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(self))
-            server.daemon_threads = True
+            server = _ViewerServer(("127.0.0.1", 0), _handler_for(self))
             threading.Thread(
                 target=server.serve_forever, kwargs={"poll_interval": 0.05}, name="ai-desktop-viewer", daemon=True
             ).start()
@@ -138,7 +148,8 @@ class Viewer:
                     self._control.minimize(browser)
                 origin = None
                 if target.kind == "window":
-                    self._control.bring_to_front(target.id)
+                    if not self._control.bring_to_front(target.id):
+                        raise CaptureError("対象のウィンドウを前面に出せませんでした。もう一度クリックしてください。")
                     origin = self._control.window_origin(target.id)
                 screen_x, screen_y = image_to_screen(meta, x, y, origin)
                 self._control.click(screen_x, screen_y, double)
@@ -190,7 +201,7 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802 - stdlib name
             parts = urlsplit(self.path)
             token = parse_qs(parts.query).get("t", [""])[0]
-            if not (self._host_ok() and secrets.compare_digest(token, viewer.token)):
+            if not (self._host_ok() and _token_matches(token, viewer.token)):
                 self._send(403, "text/plain; charset=utf-8", b"forbidden")
             elif parts.path == "/":
                 nonce = secrets.token_urlsafe(16)
@@ -210,13 +221,18 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib name
             path = urlsplit(self.path).path
-            length = int(self.headers.get("Content-Length") or 0)
+            raw_length = (self.headers.get("Content-Length") or "0").strip()
+            if not (raw_length.isascii() and raw_length.isdigit()):
+                self.close_connection = True
+                self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                return
+            length = int(raw_length)
             if length > MAX_BODY_BYTES:
                 self.close_connection = True
                 self._send_json(413, {"error": "要求が大きすぎます。"})
                 return
             raw = self.rfile.read(length)  # read before replying, even to reject
-            token_ok = secrets.compare_digest(self.headers.get(TOKEN_HEADER, ""), viewer.token)
+            token_ok = _token_matches(self.headers.get(TOKEN_HEADER, ""), viewer.token)
             if not (self._host_ok() and token_ok and self.headers.get("Origin") == viewer.origin):
                 self._send_json(403, {"error": "forbidden"})
                 return
@@ -225,8 +241,15 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
             except ValueError:
                 self._send_json(400, {"error": "要求の形式が正しくありません。"})
                 return
+            if not isinstance(body, dict):
+                self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                return
             if path == "/ack":
-                viewer.acknowledge(int(body.get("version", 0)))
+                version = body.get("version", 0)
+                if not isinstance(version, int) or isinstance(version, bool):
+                    self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                    return
+                viewer.acknowledge(version)
                 self._send_json(200, {"ok": True})
             elif path == "/click":
                 self._click(body)
