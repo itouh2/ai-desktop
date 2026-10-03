@@ -60,7 +60,7 @@ def save_viewer_screenshot(name: str) -> None:
 
 
 async def run(lines) -> None:
-    params = StdioServerParameters(command="uv", args=["run", "ai-desktop"], cwd=str(HERE.parent))
+    params = StdioServerParameters(command="uv", args=["run", "--no-sync", "ai-desktop"], cwd=str(HERE.parent))
     async with Client(params) as client:
         result = await client.call_tool("capture_window", {"title": TITLE})
         meta = json.loads(result.content[1].text)
