@@ -1,100 +1,41 @@
-import base64
-import pathlib
-
-from ai_desktop.annotate import render_page, save_page
-
-BOX = '<div class="box" style="left:10px;top:20px;width:30px;height:40px"></div>'
-PAGE_ARGS = dict(
-    background_jpeg=b"\xff\xd8fake",
-    image_width=1568,
-    image_height=882,
-    html=BOX,
-    title="Book1 <Excel>",
-    nonce="n0nce",
-)
+from ai_desktop.annotate import VIEWER_TITLE_PREFIX, content_security_policy, render_shell
 
 
-def test_page_has_strict_csp_with_nonce():
-    page = render_page(**PAGE_ARGS)
-    csp = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-n0nce'"
-    assert f'content="{csp}"' in page
+def test_viewer_csp_allows_only_own_script_and_same_origin():
+    assert content_security_policy("n0nce") == (
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+        "script-src 'nonce-n0nce'; connect-src 'self'"
+    )
+
+
+def test_viewer_shell_has_nonce_script_and_empty_stage():
+    page = render_shell("n0nce")
     assert '<script nonce="n0nce">' in page
+    assert page.index('<script nonce="n0nce">') < page.index("</head>")
+    assert '<div id="status"></div>' in page
+    assert '<div id="stage"><img id="shot" alt=""><div id="annotations"></div></div>' in page
+    assert 'new EventSource("/events?t="' in page
+    assert '"X-AI-Desktop-Token": token' in page
 
 
-def test_fit_script_is_in_head_before_claude_html():
-    page = render_page(**PAGE_ARGS)
-    script = page.index('<script nonce="n0nce">')
-    assert script < page.index("</head>")
-    assert script < page.index('<div id="annotations">')
-    assert "DOMContentLoaded" in page
-    assert "html { overflow-y: scroll; }" in page
+def test_success_status_timer_is_cancelled_by_later_statuses():
+    page = render_shell("n0nce")
+    assert "let statusTimer = null;" in page
+    assert "clearTimeout(statusTimer)" in page
+    assert "statusTimer = setTimeout(" in page
 
 
-def test_stage_matches_image_size():
-    assert 'id="stage" style="width:1568px;height:882px"' in render_page(**PAGE_ARGS)
-
-
-def test_background_is_embedded_as_data_uri():
-    encoded = base64.b64encode(b"\xff\xd8fake").decode()
-    assert f'src="data:image/jpeg;base64,{encoded}"' in render_page(**PAGE_ARGS)
-
-
-def test_claude_html_is_verbatim_and_title_escaped():
-    page = render_page(**PAGE_ARGS)
-    assert f'<div id="annotations">{BOX}</div>' in page
-    assert "<title>Book1 &lt;Excel&gt;</title>" in page
-
-
-def test_page_defines_helper_classes_and_arrowhead():
-    page = render_page(**PAGE_ARGS)
-    for selector in (
-        "#annotations .box",
-        "#annotations .badge",
-        "#annotations .note",
-        "#annotations .arrow",
-        "#annotations svg.layer",
-    ):
+def test_viewer_shell_keeps_helper_classes_and_title_prefix():
+    page = render_shell("n0nce")
+    for selector in ("#annotations .box", "#annotations .badge", "#annotations .note", "#annotations .arrow"):
         assert selector in page
     assert 'id="arrowhead"' in page
+    assert VIEWER_TITLE_PREFIX == "ai-desktop | "
+    assert 'document.title = "ai-desktop | " + next.title' in page
 
 
-def test_save_page_writes_file(tmp_path):
-    directory = tmp_path / "out"
-    path = save_page("<html>x</html>", directory)
-    assert path.parent == directory
-    assert path.name.startswith("annotated-")
-    assert path.suffix == ".html"
-    assert path.read_text(encoding="utf-8") == "<html>x</html>"
-
-
-def test_save_page_keeps_only_newest(tmp_path):
-    for day in range(1, 5):
-        (tmp_path / f"annotated-2000010{day}-000000-000000-aaaaaa.html").write_text("old", encoding="utf-8")
-    unrelated = tmp_path / "keep-me.txt"
-    unrelated.write_text("x", encoding="utf-8")
-
-    path = save_page("new", tmp_path, keep=3)
-
-    remaining = sorted(p.name for p in tmp_path.glob("annotated-*.html"))
-    assert len(remaining) == 3
-    assert path.name in remaining
-    assert "annotated-20000104-000000-000000-aaaaaa.html" in remaining
-    assert "annotated-20000103-000000-000000-aaaaaa.html" in remaining
-    assert unrelated.exists()
-
-
-def test_save_page_survives_locked_old_page(tmp_path, monkeypatch):
-    for day in range(1, 5):
-        (tmp_path / f"annotated-2000010{day}-000000-000000-aaaaaa.html").write_text("old", encoding="utf-8")
-    real_unlink = pathlib.Path.unlink
-
-    def locked_unlink(self, *args, **kwargs):
-        if self.name.startswith("annotated-2000"):
-            raise PermissionError("locked")
-        return real_unlink(self, *args, **kwargs)
-
-    monkeypatch.setattr(pathlib.Path, "unlink", locked_unlink)
-
-    path = save_page("new", tmp_path, keep=3)
-
-    assert path.exists()
+def test_clicks_on_notes_and_badges_are_not_forwarded():
+    page = render_shell("n0nce")
+    assert 'event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")' in page
+    assert "吹き出しや番号の上はクリックしても送信しません" in page
+    assert ".box" not in page.split('event.target.closest("')[1].split('")')[0]
