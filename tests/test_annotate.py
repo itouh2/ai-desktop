@@ -32,3 +32,10 @@ def test_viewer_shell_keeps_helper_classes_and_title_prefix():
     assert 'id="arrowhead"' in page
     assert VIEWER_TITLE_PREFIX == "ai-desktop | "
     assert 'document.title = "ai-desktop | " + next.title' in page
+
+
+def test_clicks_on_notes_and_badges_are_not_forwarded():
+    page = render_shell("n0nce")
+    assert 'event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")' in page
+    assert "吹き出しや番号の上はクリックしても送信しません" in page
+    assert ".box" not in page.split('event.target.closest("')[1].split('")')[0]

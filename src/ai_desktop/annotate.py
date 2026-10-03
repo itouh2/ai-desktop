@@ -111,6 +111,11 @@ async function operate(event, double) {
 addEventListener("DOMContentLoaded", () => {
   document.getElementById("stage").addEventListener("click", (event) => {
     clearTimeout(pending);
+    if (event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")) {
+      status("吹き出しや番号の上はクリックしても送信しません", false);
+      statusTimer = setTimeout(() => status("", false), 1500);
+      return;
+    }
     if (event.detail >= 2) {
       operate(event, true);
       return;
