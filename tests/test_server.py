@@ -8,7 +8,7 @@ import pytest
 from mcp import Client
 from PIL import Image
 
-from ai_desktop import capture, server
+from ai_desktop import annotate, capture, server
 from ai_desktop.captures import CaptureStore
 from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
 
@@ -46,13 +46,15 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_four_tools():
+def test_exposes_five_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
 
     names = {tool.name for tool in asyncio.run(run()).tools}
-    assert names == {"list_monitors", "list_windows", "capture_monitor", "capture_window"}
+    assert names == {
+        "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
+    }
 
 
 def test_list_monitors_returns_json():
@@ -132,3 +134,42 @@ def test_captures_are_stored_with_sequential_ids():
     background, meta = server.captures.get("c1")
     assert Image.open(io.BytesIO(background)).size == (3200, 1600)
     assert meta == first
+
+
+@pytest.fixture
+def opened(monkeypatch, tmp_path):
+    paths = []
+    monkeypatch.setattr(annotate, "ANNOTATION_DIR", tmp_path)
+    monkeypatch.setattr(annotate, "open_in_browser", paths.append)
+    return paths
+
+
+def test_show_annotated_writes_page_and_opens_browser(opened, tmp_path):
+    call("capture_window", {"title": "excel"})
+    badge = '<div class="badge" style="left:5px;top:5px">1</div>'
+    result = call("show_annotated", {"capture_id": "c1", "html": badge})
+    assert not result.is_error
+    assert len(opened) == 1
+    path = opened[0]
+    assert path.parent == tmp_path
+    assert str(path) in result.content[0].text
+    page = path.read_text(encoding="utf-8")
+    assert badge in page
+    assert 'id="stage" style="width:800px;height:600px"' in page
+    assert "<title>window:42 Book1 - Excel</title>" in page
+
+
+def test_show_annotated_unknown_capture_is_reported(opened):
+    result = call("show_annotated", {"capture_id": "c99", "html": "<div></div>"})
+    assert result.is_error
+    assert "c99" in result.content[0].text
+    assert opened == []
+
+
+@pytest.mark.parametrize("html", ["", "   "])
+def test_show_annotated_rejects_empty_html(opened, html):
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": html})
+    assert result.is_error
+    assert "html が空です" in result.content[0].text
+    assert opened == []
