@@ -65,7 +65,9 @@ class Viewer:
                 return
             server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(self))
             server.daemon_threads = True
-            threading.Thread(target=server.serve_forever, name="ai-desktop-viewer", daemon=True).start()
+            threading.Thread(
+                target=server.serve_forever, kwargs={"poll_interval": 0.05}, name="ai-desktop-viewer", daemon=True
+            ).start()
             self._server = server
 
     def close(self) -> None:
@@ -208,16 +210,18 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib name
             path = urlsplit(self.path).path
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_BODY_BYTES:
+                self.close_connection = True
+                self._send_json(413, {"error": "要求が大きすぎます。"})
+                return
+            raw = self.rfile.read(length)  # read before replying, even to reject
             token_ok = secrets.compare_digest(self.headers.get(TOKEN_HEADER, ""), viewer.token)
             if not (self._host_ok() and token_ok and self.headers.get("Origin") == viewer.origin):
                 self._send_json(403, {"error": "forbidden"})
                 return
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY_BYTES:
-                self._send_json(413, {"error": "要求が大きすぎます。"})
-                return
             try:
-                body = json.loads(self.rfile.read(length) or b"{}")
+                body = json.loads(raw or b"{}")
             except ValueError:
                 self._send_json(400, {"error": "要求の形式が正しくありません。"})
                 return
