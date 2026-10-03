@@ -21,6 +21,7 @@ _log = logging.getLogger(__name__)
 ACK_TIMEOUT_SECONDS = 1.5
 HEARTBEAT_SECONDS = 15.0
 SETTLE_SECONDS = 0.15  # after minimizing the browser, before the click arrives
+AFTER_CLICK_SECONDS = 0.3  # games handle a click on a later frame; keep focus and cursor until then
 MAX_BODY_BYTES = 1024
 TOKEN_HEADER = "X-AI-Desktop-Token"
 
@@ -48,12 +49,14 @@ class Viewer:
         store: CaptureStore,
         control: Any,
         settle_seconds: float = SETTLE_SECONDS,
+        after_click_seconds: float = AFTER_CLICK_SECONDS,
         ack_timeout: float = ACK_TIMEOUT_SECONDS,
         heartbeat_seconds: float = HEARTBEAT_SECONDS,
     ) -> None:
         self._store = store
         self._control = control
         self._settle_seconds = settle_seconds
+        self._after_click_seconds = after_click_seconds
         self._ack_timeout = ack_timeout
         self.heartbeat_seconds = heartbeat_seconds
         self.token = secrets.token_urlsafe(24)
@@ -156,6 +159,7 @@ class Viewer:
                         if not self._control.is_minimized(browser):
                             raise CaptureError("ブラウザを最小化できなかったため、クリックしませんでした。")
                 self._control.click(screen_x, screen_y, double)
+                time.sleep(self._after_click_seconds)
             finally:
                 self._control.set_cursor(*cursor)
                 if browser is not None:

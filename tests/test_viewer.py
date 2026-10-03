@@ -28,6 +28,7 @@ class FakeControl:
         fail_rect=False,
     ):
         self.calls = []
+        self.times = {}
         self.minimize_ok = minimize_ok
         self.fail_rect = fail_rect
         self.browser_rect = browser_rect
@@ -69,9 +70,11 @@ class FakeControl:
 
     def click(self, x, y, double):
         self.calls.append(("click", x, y, double))
+        self.times["click"] = time.monotonic()
 
     def set_cursor(self, x, y):
         self.calls.append(("set_cursor", x, y))
+        self.times["set_cursor"] = time.monotonic()
 
     def restore(self, hwnd):
         self.calls.append(("restore", hwnd))
@@ -96,7 +99,9 @@ def control():
 
 @pytest.fixture
 def viewer(store, control):
-    viewer = Viewer(store, control, settle_seconds=0, ack_timeout=1.0, heartbeat_seconds=0.2)
+    viewer = Viewer(
+        store, control, settle_seconds=0, after_click_seconds=0, ack_timeout=1.0, heartbeat_seconds=0.2
+    )
     yield viewer
     viewer.close()
 
@@ -116,6 +121,20 @@ def test_click_on_window_capture_follows_the_window(viewer, control):
         ("restore", BROWSER),
     ]
     assert viewer.next_view(0, 0) is None  # nothing published
+
+
+def test_cursor_and_browser_wait_after_the_click(store, control):
+    viewer = Viewer(
+        store, control, settle_seconds=0, after_click_seconds=0.2, ack_timeout=1.0, heartbeat_seconds=0.2
+    )
+    try:
+        viewer.perform_click("c2", 10, 20, False)
+    finally:
+        viewer.close()
+    # time.monotonic() ticks at ~16 ms on Windows, so allow a little slack under the 0.2 s wait.
+    assert control.times["set_cursor"] - control.times["click"] >= 0.15
+    calls = control.calls
+    assert calls.index(("set_cursor", 5, 6)) > calls.index(("click", 110, 220, False))
 
 
 def test_monitor_click_under_the_browser_minimizes_it(viewer, control):
