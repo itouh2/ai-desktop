@@ -202,7 +202,9 @@ ai-desktop/
 - まず `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` を試す。
 - 失敗したら `SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)` にフォールバックする。
 
-これで全 API の座標が物理ピクセルにそろう。
+これで全 API の座標が物理ピクセルにそろう。設定後に実効値を読み戻し、per-monitor でなければ警告を標準エラー出力に出す（例外は送出しない）。
+
+操作系ライブラリ（pywinauto / PyAutoGUI）は import 時にプロセスの DPI awareness を変更することがあるため、`enable_dpi_awareness()` より後に（ツール関数の中で遅延 import して）読み込むこと。
 
 ### 6.4 stdio の扱い
 
@@ -218,7 +220,9 @@ stdio サーバーなので、標準出力には MCP のメッセージ以外を
 
 ## 8. テスト
 
-### 自動テスト（pytest、Windows 非依存）
+### 自動テスト（pytest）
+
+`test_imaging.py` と `test_matching.py` は Windows 非依存。`test_server.py` は `capture`（pywin32）を import するため Windows 上でのみ実行できる。
 
 - `test_imaging.py`
   - `fit_size`: 長辺が上限超（横長・縦長）、ちょうど上限、上限未満（scale 1.0、拡大しない）
