@@ -39,3 +39,13 @@ def test_clicks_on_notes_and_badges_are_not_forwarded():
     assert 'event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")' in page
     assert "吹き出しや番号の上はクリックしても送信しません" in page
     assert ".box" not in page.split('event.target.closest("')[1].split('")')[0]
+
+
+def test_viewer_shell_has_button_bar_and_explanation_panel():
+    page = render_shell("n0nce")
+    assert '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span></div>' in page
+    assert '<aside id="side" hidden></aside>' in page
+    assert "button.textContent = label;" in page
+    assert 'side.textContent = next.explanation || "";' in page
+    assert 'post("/press", {button: label})' in page
+    assert 'events.addEventListener("state"' in page

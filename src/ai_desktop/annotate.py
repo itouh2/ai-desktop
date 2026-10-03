@@ -39,6 +39,17 @@ _VIEWER_CSS = """
   font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
 #status.show { display: block; }
 #status.error { background: #e5484d; }
+#layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
+#main { flex: 1 1 640px; min-width: 0; }
+#side { flex: 0 1 340px; box-sizing: border-box; padding: 14px 16px; color: #eee;
+  font: 15px/1.7 system-ui, "Yu Gothic UI", sans-serif; white-space: pre-wrap; }
+#bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px;
+  background: #2a2a2a; font: 14px system-ui, "Yu Gothic UI", sans-serif; }
+#bar[hidden], #side[hidden] { display: none; }
+#bar button { padding: 6px 14px; border: 0; border-radius: 6px; background: #e5484d; color: #fff;
+  font: inherit; font-weight: 700; cursor: pointer; }
+#bar button:disabled { background: #555; color: #aaa; cursor: default; }
+#bar-state { margin-left: auto; color: #ccc; }
 """
 
 # The live viewer: receives views over SSE, scales the stage, and posts clicks back.
@@ -48,12 +59,49 @@ let view = null;
 let busy = false;
 let pending = null;
 let statusTimer = null;
+let buttonState = "idle";
+const STATE_TEXT = {
+  waiting: "",
+  thinking: "考え中…",
+  idle: "Claude が待ち受けると押せます",
+  error: "撮影できませんでした。チャットを確認してください",
+};
 
 function fit() {
   if (!view) return;
-  const scale = document.documentElement.clientWidth / view.width;
+  const viewport = document.getElementById("viewport");
+  const scale = viewport.clientWidth / view.width;
   document.getElementById("stage").style.transform = "scale(" + scale + ")";
-  document.getElementById("viewport").style.height = view.height * scale + "px";
+  viewport.style.height = view.height * scale + "px";
+}
+
+function renderButtons() {
+  const labels = view ? view.buttons : [];
+  document.getElementById("bar").hidden = labels.length === 0;
+  document.getElementById("buttons").replaceChildren(...labels.map((label) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.disabled = buttonState !== "waiting";
+    button.addEventListener("click", () => press(label));
+    return button;
+  }));
+  document.getElementById("bar-state").textContent = STATE_TEXT[buttonState] || "";
+}
+
+async function press(label) {
+  for (const button of document.querySelectorAll("#buttons button")) button.disabled = true;
+  try {
+    const response = await post("/press", {button: label});
+    const result = await response.json();
+    if (result.error) {
+      renderButtons();
+      document.getElementById("bar-state").textContent = result.error;
+    }
+  } catch (error) {
+    renderButtons();
+    document.getElementById("bar-state").textContent = "送信できませんでした: " + error;
+  }
 }
 
 function status(text, isError) {
@@ -72,6 +120,10 @@ function render(next) {
   document.getElementById("shot").src =
     "/image/" + encodeURIComponent(next.captureId) + "?t=" + encodeURIComponent(token);
   document.getElementById("annotations").innerHTML = next.html;
+  const side = document.getElementById("side");
+  side.textContent = next.explanation || "";
+  side.hidden = !next.explanation;
+  renderButtons();
   status("", false);
   fit();
 }
@@ -128,6 +180,10 @@ addEventListener("DOMContentLoaded", () => {
     render(next);
     post("/ack", {version: next.version});
   });
+  events.addEventListener("state", (event) => {
+    buttonState = JSON.parse(event.data).state;
+    renderButtons();
+  });
   events.addEventListener("error", () => {
     status("サーバーとの接続が切れました。Claude Code のセッションを確認してください。", true);
   });
@@ -155,9 +211,12 @@ def render_shell(nonce: str) -> str:
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
+        '<div id="layout"><div id="main">\n'
+        '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span></div>\n'
         '<div id="viewport"><div id="stage">'
         '<img id="shot" alt="">'
         '<div id="annotations"></div>'
         "</div></div>\n"
+        '</div><aside id="side" hidden></aside></div>\n'
         "</body></html>\n"
     )
