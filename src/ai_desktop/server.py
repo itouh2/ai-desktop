@@ -31,8 +31,7 @@ can click on the page to click the real screen. When an interaction on that page
 (guiding steps, letting the user pick an option, getting a confirmation), pass buttons \
 (and an explanation) to show_annotated and call wait_for_button; you get the pressed \
 label plus a fresh capture of the same target, so react to it and, to keep going, show \
-new buttons and wait again. If it returns {"pressed": null}, just call it again; stop \
-when the user starts talking about something else in the chat."""
+new buttons and wait again. If it returns {"pressed": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop using the buttons (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons so the page leaves its thinking state."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
@@ -189,13 +188,13 @@ def show_annotated(
     return f"ブラウザで開きました: {viewer.url}"
 
 
-
 @mcp.tool()
 def wait_for_button(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image | str]:
     """Wait until the user presses one of the buttons on the page shown by show_annotated
     (call it right after showing buttons). Returns {"pressed": "<label>", ...metadata} plus a
     fresh JPEG of the same window or monitor, taken when the button was pressed. Returns
-    {"pressed": null} after timeout_seconds (1-110, default 90); then just call it again."""
+    {"pressed": null} after timeout_seconds (1-110, default 90); then just call it again.
+    Errors if no page or no buttons are shown, or if the re-capture fails."""
     timeout = max(1, min(WAIT_MAX_SECONDS, int(timeout_seconds)))
     with _reported():
         label = viewer.wait_for_button(timeout)

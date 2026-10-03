@@ -436,6 +436,96 @@ def test_recapture_current_uses_the_shown_target(viewer):
     assert viewer.recapture_current(lambda target: target) == Target("monitor", 1)
 
 
+def test_monitor_recapture_moves_the_browser_out_of_the_way(viewer, control):
+    viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+    assert viewer.recapture_current(lambda target: "shot") == "shot"
+    calls = [call for call in control.calls if call[0] in ("minimize", "is_minimized", "restore")]
+    assert calls == [("minimize", BROWSER), ("is_minimized", BROWSER), ("restore", BROWSER)]
+
+
+def test_monitor_recapture_leaves_a_browser_on_another_monitor(viewer, control):
+    control.browser_rect = (3840, 0, 7680, 2160)
+    viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+    assert viewer.recapture_current(lambda target: "shot") == "shot"
+    assert not [call for call in control.calls if call[0] == "minimize"]
+
+
+def test_window_recapture_does_not_touch_the_browser(viewer, control):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert viewer.recapture_current(lambda target: "shot") == "shot"
+    assert not [call for call in control.calls if call[0] == "find_window"]
+
+
+def test_monitor_recapture_aborts_when_the_browser_will_not_minimize(store):
+    control = FakeControl(minimize_ok=False)
+    viewer = Viewer(store, control, settle_seconds=0, after_click_seconds=0, ack_timeout=1.0)
+    try:
+        viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+        recapture_calls = []
+        with pytest.raises(CaptureError, match="最小化できなかった"):
+            viewer.recapture_current(lambda target: recapture_calls.append(target))
+        assert recapture_calls == []
+        assert ("restore", BROWSER) in control.calls
+        assert viewer._state == "error"
+    finally:
+        viewer.close()
+
+
+def test_unexpected_recapture_failure_becomes_a_capture_error(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+
+    def failing(target):
+        raise OSError("boom")
+
+    with pytest.raises(CaptureError, match="撮り直しに失敗しました"):
+        viewer.recapture_current(failing)
+    assert viewer._state == "error"
+
+
+def test_publishing_without_buttons_ends_a_wait(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    for _ in range(100):
+        if viewer._state == "waiting":
+            break
+        time.sleep(0.02)
+    viewer.publish("c2", "<div></div>", "Excel", "", None)
+    thread.join(5)
+    assert results == [None]
+    assert viewer._state == "idle"
+
+
+def test_publishing_after_a_press_leaves_the_thinking_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    for _ in range(100):
+        if viewer._state == "waiting":
+            break
+        time.sleep(0.02)
+    viewer.press("できた")
+    thread.join(5)
+    assert viewer._state == "thinking"
+    viewer.publish("c2", "<div></div>", "Excel")
+    assert viewer._state == "idle"
+
+
+def test_press_with_a_wrong_host_is_forbidden(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    body = json.dumps({"button": "できた"}, ensure_ascii=False).encode("utf-8")
+    connection = http.client.HTTPConnection("127.0.0.1", int(viewer.origin.rsplit(":", 1)[1]), timeout=5)
+    connection.putrequest("POST", "/press", skip_host=True)
+    connection.putheader("Host", "evil.example:80")
+    connection.putheader(TOKEN_HEADER, viewer.token)
+    connection.putheader("Origin", viewer.origin)
+    connection.putheader("Content-Type", "application/json")
+    connection.putheader("Content-Length", str(len(body)))
+    connection.endheaders(body)
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    assert response.status == 403
+
+
 def test_press_endpoint_checks_auth_and_state(viewer):
     viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
     assert post(viewer, "/press", {"button": "できた"}, token="wrong")[0] == 403

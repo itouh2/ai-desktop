@@ -259,7 +259,8 @@ def test_show_annotated_reports_browser_failure(viewer):
 def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
-
+    assert "five nulls" in server.INSTRUCTIONS
+    assert "without buttons" in server.INSTRUCTIONS
 
 
 def test_show_annotated_passes_explanation_and_buttons(viewer):

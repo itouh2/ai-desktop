@@ -125,7 +125,10 @@ class Viewer:
                 "explanation": explanation[:MAX_EXPLANATION_CHARS],
                 "buttons": list(buttons or []),
             }
-            if self._state in ("thinking", "error"):
+            if self._state == "waiting" and not self._view["buttons"]:
+                self._wait_generation += 1  # the waiter returns None
+                self._set_state("idle")
+            elif self._state in ("thinking", "error"):
                 self._set_state("idle")
             self._changed.notify_all()
             if self._clients == 0:
@@ -183,12 +186,42 @@ class Viewer:
                 if self._view is None:
                     raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
                 capture_id = self._view["captureId"]
+            browser = None
             try:
-                return recapture(self._store.target(capture_id))
-            except CaptureError:
+                target = self._store.target(capture_id)
+                if target.kind == "monitor":
+                    browser = self._minimize_browser_over(capture_id)
+                return recapture(target)
+            except Exception as error:
                 with self._changed:
                     self._set_state("error")
-                raise
+                if isinstance(error, CaptureError):
+                    raise
+                raise CaptureError(f"撮り直しに失敗しました: {error}") from error
+            finally:
+                if browser is not None:
+                    self._control.restore(browser)
+
+    def _minimize_browser_over(self, capture_id: str) -> Any:
+        """Minimize the viewer browser if it covers the shown monitor; its handle when minimized."""
+        browser = self._control.find_window(VIEWER_TITLE_PREFIX)
+        if browser is None:
+            return None
+        _, meta = self._store.get(capture_id)
+        left, top, right, bottom = self._control.window_rect(browser)
+        m_left, m_top = meta["originX"], meta["originY"]
+        m_right, m_bottom = m_left + meta["originalWidth"], m_top + meta["originalHeight"]
+        if not (left < m_right and m_left < right and top < m_bottom and m_top < bottom):
+            return None
+        self._control.minimize(browser)
+        try:
+            time.sleep(self._settle_seconds)
+            if not self._control.is_minimized(browser):
+                raise CaptureError("ブラウザを最小化できなかったため、撮り直せませんでした。")
+        except BaseException:
+            self._control.restore(browser)
+            raise
+        return browser
 
     def _set_state(self, state: str) -> None:
         """Caller holds self._changed."""
