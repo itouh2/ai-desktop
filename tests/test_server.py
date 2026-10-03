@@ -8,7 +8,7 @@ import pytest
 from mcp import Client
 from PIL import Image
 
-from ai_desktop import annotate, capture, server
+from ai_desktop import capture, server
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
 
@@ -151,87 +151,107 @@ def test_recapture_takes_the_same_target_again():
     assert server.captures.get(new_id)[1]["source"] == "window:42 Book1 - Excel"
 
 
+class FakeViewer:
+    """Stands in for ai_desktop.viewer.Viewer: records publishes instead of serving pages."""
+
+    url = "http://127.0.0.1:5555/?t=token"
+
+    def __init__(self):
+        self.delivered = False
+        self.start_error = None
+        self.open_error = None
+        self.published = []
+        self.opened = 0
+        self.focused = 0
+
+    def publish(self, capture_id, html, title):
+        if self.start_error is not None:
+            raise self.start_error
+        self.published.append((capture_id, html, title))
+        return self.delivered
+
+    def open_browser(self):
+        if self.open_error is not None:
+            raise self.open_error
+        self.opened += 1
+
+    def focus_browser(self):
+        self.focused += 1
+
+
 @pytest.fixture
-def opened(monkeypatch, tmp_path):
-    paths = []
-    monkeypatch.setattr(annotate, "ANNOTATION_DIR", tmp_path)
-    monkeypatch.setattr(annotate, "open_in_browser", paths.append)
-    return paths
+def viewer(monkeypatch):
+    fake = FakeViewer()
+    monkeypatch.setattr(server, "viewer", fake)
+    return fake
 
 
-def test_show_annotated_writes_page_and_opens_browser(opened, tmp_path):
+def test_show_annotated_opens_browser_when_no_tab_is_open(viewer):
     call("capture_window", {"title": "excel"})
     badge = '<div class="badge" style="left:5px;top:5px">1</div>'
     result = call("show_annotated", {"capture_id": "c1", "html": badge})
     assert not result.is_error
-    assert len(opened) == 1
-    path = opened[0]
-    assert path.parent == tmp_path
-    assert str(path) in result.content[0].text
-    page = path.read_text(encoding="utf-8")
-    assert badge in page
-    assert 'id="stage" style="width:800px;height:600px"' in page
-    assert "<title>window:42 Book1 - Excel</title>" in page
+    assert result.content[0].text == "ブラウザで開きました: http://127.0.0.1:5555/?t=token"
+    assert viewer.published == [("c1", badge, "window:42 Book1 - Excel")]
+    assert (viewer.opened, viewer.focused) == (1, 0)
 
 
-def test_show_annotated_unknown_capture_is_reported(opened):
+def test_show_annotated_reuses_the_open_tab(viewer):
+    viewer.delivered = True
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>", "title": "設定画面"})
+    assert result.content[0].text == "既存のタブを更新しました。"
+    assert viewer.published == [("c1", "<div></div>", "設定画面")]
+    assert (viewer.opened, viewer.focused) == (0, 1)
+
+
+def test_show_annotated_unknown_capture_is_reported(viewer):
     result = call("show_annotated", {"capture_id": "c99", "html": "<div></div>"})
     assert result.is_error
     assert "c99" in result.content[0].text
-    assert opened == []
+    assert viewer.published == []
 
 
 @pytest.mark.parametrize("html", ["", "   "])
-def test_show_annotated_rejects_empty_html(opened, html):
+def test_show_annotated_rejects_empty_html(viewer, html):
     call("capture_monitor")
     result = call("show_annotated", {"capture_id": "c1", "html": html})
     assert result.is_error
     assert "html が空です" in result.content[0].text
-    assert opened == []
+    assert viewer.published == []
 
 
 @pytest.mark.parametrize("length, expected_error", [(100_000, False), (100_001, True)])
-def test_show_annotated_html_length_limit(opened, length, expected_error):
+def test_show_annotated_html_length_limit(viewer, length, expected_error):
     call("capture_monitor")
     result = call("show_annotated", {"capture_id": "c1", "html": "x" * length})
     assert result.is_error is expected_error
     if expected_error:
         assert "html が長すぎます" in result.content[0].text
-        assert opened == []
+        assert viewer.published == []
     else:
-        assert len(opened) == 1
+        assert len(viewer.published) == 1
+
+
+def test_show_annotated_reports_server_start_failure(viewer):
+    viewer.start_error = OSError("address in use")
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert result.is_error
+    assert "表示用のローカルサーバーを起動できませんでした" in result.content[0].text
+    assert "address in use" in result.content[0].text
+
+
+def test_show_annotated_reports_browser_failure(viewer):
+    viewer.open_error = OSError("no association")
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert result.is_error
+    text = result.content[0].text
+    assert "ブラウザで開けませんでした: http://127.0.0.1:5555/?t=token" in text
+    assert "no association" in text
 
 
 def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
-
-
-def test_show_annotated_reports_save_failure(opened, monkeypatch):
-    def fail(page, directory):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(annotate, "save_page", fail)
-    call("capture_monitor")
-    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
-    assert result.is_error
-    assert "注釈ページを保存できませんでした" in result.content[0].text
-    assert "disk full" in result.content[0].text
-    assert opened == []
-
-
-def test_show_annotated_reports_browser_failure(monkeypatch, tmp_path):
-    def fail(path):
-        raise OSError("no association")
-
-    monkeypatch.setattr(annotate, "ANNOTATION_DIR", tmp_path)
-    monkeypatch.setattr(annotate, "open_in_browser", fail)
-    call("capture_monitor")
-    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
-    assert result.is_error
-    text = result.content[0].text
-    assert "ブラウザで開けませんでした" in text
-    assert "no association" in text
-    pages = list(tmp_path.glob("annotated-*.html"))
-    assert len(pages) == 1
-    assert pages[0].name in text

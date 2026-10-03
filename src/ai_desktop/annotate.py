@@ -1,17 +1,6 @@
-"""Annotated screenshot pages: Claude's HTML layered over a capture, opened in the browser."""
+"""The viewer page: a capture as background with Claude's HTML on top, updated live."""
 
 from __future__ import annotations
-
-import base64
-import html as html_lib
-import os
-import tempfile
-import uuid
-from datetime import datetime
-from pathlib import Path
-
-ANNOTATION_DIR = Path(tempfile.gettempdir()) / "ai-desktop" / "annotations"
-KEEP_PAGES = 30
 
 _CSS = """
 html, body { margin: 0; background: #1e1e1e; }
@@ -40,19 +29,6 @@ _ARROWHEAD = (
     'markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e5484d"/>'
     "</marker></defs></svg>"
 )
-
-# Scale the whole stage to the window width, so annotations stay on their image pixels.
-_FIT_SCRIPT = """
-function fit() {
-  const stage = document.getElementById("stage");
-  const viewport = document.getElementById("viewport");
-  const scale = document.documentElement.clientWidth / stage.offsetWidth;
-  stage.style.transform = "scale(" + scale + ")";
-  viewport.style.height = stage.offsetHeight * scale + "px";
-}
-addEventListener("DOMContentLoaded", fit);
-addEventListener("resize", fit);
-"""
 
 VIEWER_TITLE_PREFIX = "ai-desktop | "
 
@@ -173,52 +149,3 @@ def render_shell(nonce: str) -> str:
         "</div></div>\n"
         "</body></html>\n"
     )
-
-
-def render_page(
-    background_jpeg: bytes,
-    image_width: int,
-    image_height: int,
-    html: str,
-    title: str,
-    nonce: str,
-) -> str:
-    """One self-contained page: the capture as background, Claude's HTML on top in image pixels."""
-    background = base64.b64encode(background_jpeg).decode("ascii")
-    csp = f"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-{nonce}'"
-    return (
-        "<!doctype html>\n"
-        '<html lang="ja"><head><meta charset="utf-8">\n'
-        f'<meta http-equiv="Content-Security-Policy" content="{csp}">\n'
-        f"<title>{html_lib.escape(title)}</title>\n"
-        f"<style>{_CSS}</style>\n"
-        f'<script nonce="{nonce}">{_FIT_SCRIPT}</script>\n'
-        "</head><body>\n"
-        f"{_ARROWHEAD}\n"
-        '<div id="viewport">'
-        f'<div id="stage" style="width:{image_width}px;height:{image_height}px">'
-        f'<img id="shot" src="data:image/jpeg;base64,{background}" alt="">'
-        f'<div id="annotations">{html}</div>'
-        "</div></div>\n"
-        "</body></html>\n"
-    )
-
-
-def save_page(page: str, directory: Path, keep: int = KEEP_PAGES) -> Path:
-    """Write the page and delete older pages so only the newest `keep` remain."""
-    directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    path = directory / f"annotated-{stamp}-{uuid.uuid4().hex[:6]}.html"
-    path.write_text(page, encoding="utf-8")
-    others = sorted(p for p in directory.glob("annotated-*.html") if p != path)
-    for old in others[: max(0, len(others) - (keep - 1))]:
-        try:
-            old.unlink(missing_ok=True)
-        except OSError:
-            pass  # pruning is best-effort; a locked old page must not fail the save
-    return path
-
-
-def open_in_browser(path: Path) -> None:
-    """Open with the app associated with .html, normally the default browser."""
-    os.startfile(path)
