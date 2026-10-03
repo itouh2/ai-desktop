@@ -1,0 +1,66 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-03-viewer-click.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: 撮影対象の記録と座標換算の拡張",
+      "status": "pending",
+      "description": "**Goal:** 撮影ごとに対象（`Target`：モニター id かウィンドウのハンドル）を `CaptureStore` に記録し、同じ対象を撮り直す `_recapture` を用意する。`image_to_screen` に基準位置の上書き引数を足す。\n\n**Files:**\n- Modify: `src/ai_desktop/captures.py`（ファイル全体を置き換え）\n- Modify: `src/ai_desktop/imaging.py`（`image_to_screen` を置き換え）\n- Modify: `src/ai_desktop/server.py`（import、`_capture_result` まわり、撮影ツールの return）\n- Test: `tests/test_captures.py`、`tests/test_imaging.py`、`tests/test_server.py`\n\n**Acceptance Criteria:**\n- [ ] `CaptureStore.add(..., target)` で記録した `Target` が `target(capture_id)` で返る\n- [ ] 対象の記録がない撮影は「操作の対象を記録していません」、未知の id は id を含む `CaptureError` になる\n- [ ] `image_to_screen(meta, x, y, origin=(ox, oy))` が撮影時の origin の代わりに `(ox, oy)` を使う\n- [ ] `capture_monitor` は `Target(\"monitor\", id)`、`capture_window` は `Target(\"window\", hwnd)` を記録する\n- [ ] `server._recapture(target)` が同じ対象を撮り直し、同じ `Target` 付きの新しい captureId を返す\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `57 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/captures.py\", \"src/ai_desktop/imaging.py\", \"src/ai_desktop/server.py\", \"tests/test_captures.py\", \"tests/test_imaging.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"`CaptureStore.add(..., target)` で記録した `Target` が `target(capture_id)` で返る\", \"対象の記録がない撮影は「操作の対象を記録していません」、未知の id は id を含む `CaptureError` になる\", \"`image_to_screen(meta, x, y, origin=(ox, oy))` が撮影時の origin の代わりに `(ox, oy)` を使う\", \"`capture_monitor` は `Target(\\\"monitor\\\", id)`、`capture_window` は `Target(\\\"window\\\", hwnd)` を記録する\", \"`server._recapture(target)` が同じ対象を撮り直し、同じ `Target` 付きの新しい captureId を返す\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: Win32 の操作モジュールと実機スモークテスト",
+      "status": "pending",
+      "description": "**Goal:** クリック・ダブルクリック・マウス位置・前面化（Alt キーの回避策）・最小化と復元・タイトル検索を行う `control.py` と、試験用ウィンドウ・スモークスクリプトを作り、実機で動作を確かめる。\n\n**Files:**\n- Create: `src/ai_desktop/control.py`\n- Create: `scripts/click_target.py`\n- Create: `scripts/control_smoke.py`\n\n**Acceptance Criteria:**\n- [ ] `PYTHONIOENCODING=utf-8 uv run python scripts/control_smoke.py` が例外なく終わる\n- [ ] 出力が `bring back original: True`、`bring target: True`、`after click: {'single': 1, 'double': 0}`、`after double: {'single': 2, 'double': 1}`、`cursor restored: True`、`minimized: True`、`restored to front: True` になる\n- [ ] 同じスモークテストを 3 回続けて実行し、3 回とも上の値になる\n- [ ] 試験用ウィンドウは終了時に閉じ、元の前面ウィンドウが前面に戻る\n- [ ] `uv run pytest -v` が引き続き全件 PASS（57 件）\n\n**Verify:** `for i in 1 2 3; do PYTHONIOENCODING=utf-8 uv run python scripts/control_smoke.py | grep after; done` → 3 回とも `after click: {'single': 1, 'double': 0}` と `after double: {'single': 2, 'double': 1}`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/control.py\", \"scripts/click_target.py\", \"scripts/control_smoke.py\"], \"verifyCommand\": \"for i in 1 2 3; do PYTHONIOENCODING=utf-8 uv run python scripts/control_smoke.py | grep after; done\", \"acceptanceCriteria\": [\"`PYTHONIOENCODING=utf-8 uv run python scripts/control_smoke.py` が例外なく終わる\", \"出力が `bring back original: True`、`bring target: True`、`after click: {'single': 1, 'double': 0}`、`after double: {'single': 2, 'double': 1}`、`cursor restored: True`、`minimized: True`、`restored to front: True` になる\", \"同じスモークテストを 3 回続けて実行し、3 回とも上の値になる\", \"試験用ウィンドウは終了時に閉じ、元の前面ウィンドウが前面に戻る\", \"`uv run pytest -v` が引き続き全件 PASS（57 件）\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: 高 DPI 非対応アプリのウィンドウ撮影の修正",
+      "status": "pending",
+      "description": "**Goal:** 高 DPI 非対応のウィンドウを PrintWindow で撮ると左上の一部にしか写らない問題を、ウィンドウとモニターの DPI を比べて「写った部分を切り出して元のサイズに拡大」して直す。\n\n**Files:**\n- Modify: `src/ai_desktop/imaging.py`（`restore_dpi_scaling` を追加）\n- Modify: `src/ai_desktop/capture.py`（import、argtypes、`_capture_window` の return、`_monitor_dpi` を追加）\n- Test: `tests/test_imaging.py`\n\n**Acceptance Criteria:**\n- [ ] `restore_dpi_scaling(image, 96, 144)` が、左上 2/3 の内容を元のサイズに引き伸ばす（右下の画素が内容の色になる）\n- [ ] ウィンドウ DPI がモニター DPI 以上、または 0（取得失敗）のときは、同じ画像オブジェクトをそのまま返す\n- [ ] 実機で、試験用ウィンドウ（tkinter、高 DPI 非対応）を `capture_window` で撮ると、右下付近の画素が背景色（黒ではない）になり、画像全体に中身が写る\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `59 passed`。Step 5 のスクリプトで `window dpi: 96 monitor dpi: 144`（表示スケール 150% の場合）と、黒ではない右下の画素を確認する。\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/imaging.py\", \"src/ai_desktop/capture.py\", \"tests/test_imaging.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"`restore_dpi_scaling(image, 96, 144)` が、左上 2/3 の内容を元のサイズに引き伸ばす（右下の画素が内容の色になる）\", \"ウィンドウ DPI がモニター DPI 以上、または 0（取得失敗）のときは、同じ画像オブジェクトをそのまま返す\", \"実機で、試験用ウィンドウ（tkinter、高 DPI 非対応）を `capture_window` で撮ると、右下付近の画素が背景色（黒ではない）になり、画像全体に中身が写る\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: ビューアーページの枠組み",
+      "status": "pending",
+      "description": "**Goal:** SSE で表示内容を受け取り、ステージを拡大縮小し、クリック・ダブルクリックをサーバーに送るビューアーページ（`render_shell`）と、その CSP（`content_security_policy`）を `annotate.py` に追加する。既存のファイル保存方式の関数は Task 6 まで残す。\n\n**Files:**\n- Modify: `src/ai_desktop/annotate.py`（`def render_page(` の直前に追加）\n- Test: `tests/test_annotate.py`\n\n**Acceptance Criteria:**\n- [ ] `content_security_policy(\"n0nce\")` が `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-n0nce'; connect-src 'self'` を返す\n- [ ] `render_shell(nonce)` のナンス付きスクリプトが `</head>` より前にあり、`#status`、空の `#stage`（`#shot` と `#annotations`）、`EventSource(\"/events?t=\"`、`X-AI-Desktop-Token` ヘッダーを含む\n- [ ] 部品クラス（`.box`、`.badge`、`.note`、`.arrow`）と矢じりマーカー、`document.title = \"ai-desktop | \" + next.title` を含む\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `62 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/annotate.py\", \"tests/test_annotate.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"`content_security_policy(\\\"n0nce\\\")` が `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-n0nce'; connect-src 'self'` を返す\", \"`render_shell(nonce)` のナンス付きスクリプトが `</head>` より前にあり、`#status`、空の `#stage`（`#shot` と `#annotations`）、`EventSource(\\\"/events?t=\\\"`、`X-AI-Desktop-Token` ヘッダーを含む\", \"部品クラス（`.box`、`.badge`、`.note`、`.arrow`）と矢じりマーカー、`document.title = \\\"ai-desktop | \\\" + next.title` を含む\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: ビューアーの Web サーバーとクリック操作",
+      "status": "pending",
+      "description": "**Goal:** `Viewer`（127.0.0.1 の Web サーバー、合言葉・Host・Origin の確認、SSE、ack、画像配信、タブの再利用判定、クリック操作の手順）を `viewer.py` に作り、偽の control と実際の HTTP サーバーでテストする。\n\n**Files:**\n- Create: `src/ai_desktop/viewer.py`\n- Test: `tests/test_viewer.py`\n\n**Acceptance Criteria:**\n- [ ] ウィンドウ撮影へのクリックで、control の呼び出しが `find_window → cursor_pos → minimize(ブラウザ) → bring_to_front(対象) → window_origin(対象) → click(今の origin 基準の座標) → set_cursor(元の位置) → restore(ブラウザ)` の順になり、新しい captureId が注釈なしで表示内容になる\n- [ ] モニター撮影へのダブルクリックは撮影時の origin で座標を求め、前面化はしない\n- [ ] 途中で失敗しても `set_cursor` と `restore` が最後に呼ばれ、クリックはされない\n- [ ] 画像の範囲外は control を呼ぶ前にエラー、ブラウザと同じウィンドウはエラー、操作中の 2 つ目はエラー\n- [ ] 合言葉が違う GET、合言葉か Origin が違う POST は 403。ページは CSP（`connect-src 'self'` とナンス）、`Referrer-Policy: no-referrer`、`Cache-Control: no-store` 付き\n- [ ] `/image/<id>` が保存済みの背景を返し、未知の id は 404\n- [ ] タブがないときの `publish` は `False`、SSE で受け取って ack を返すタブがあるときは `True`\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `74 passed`（`tests/test_viewer.py` の 12 件を含む）\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/viewer.py\", \"tests/test_viewer.py\"], \"verifyCommand\": \"for i in 1 2 3; do uv run pytest -q | tail -1; done\", \"acceptanceCriteria\": [\"ウィンドウ撮影へのクリックで、control の呼び出しが `find_window → cursor_pos → minimize(ブラウザ) → bring_to_front(対象) → window_origin(対象) → click(今の origin 基準の座標) → set_cursor(元の位置) → restore(ブラウザ)` の順になり、新しい captureId が注釈なしで表示内容になる\", \"モニター撮影へのダブルクリックは撮影時の origin で座標を求め、前面化はしない\", \"途中で失敗しても `set_cursor` と `restore` が最後に呼ばれ、クリックはされない\", \"画像の範囲外は control を呼ぶ前にエラー、ブラウザと同じウィンドウはエラー、操作中の 2 つ目はエラー\", \"合言葉が違う GET、合言葉か Origin が違う POST は 403。ページは CSP（`connect-src 'self'` とナンス）、`Referrer-Policy: no-referrer`、`Cache-Control: no-store` 付き\", \"`/image/<id>` が保存済みの背景を返し、未知の id は 404\", \"タブがないときの `publish` は `False`、SSE で受け取って ack を返すタブがあるときは `True`\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        3
+      ]
+    },
+    {
+      "id": 5,
+      "subject": "Task 6: show_annotated をビューアーに切り替える",
+      "status": "pending",
+      "description": "**Goal:** `show_annotated` をビューアー経由（開いているタブがあれば更新して前面に、なければブラウザを開く）に切り替え、一時フォルダへの HTML 保存と関連コード・テストを取り除く。\n\n**Files:**\n- Modify: `src/ai_desktop/server.py`\n- Modify: `src/ai_desktop/annotate.py`（ファイル全体を置き換え）\n- Modify: `tests/test_annotate.py`（ファイル全体を置き換え）\n- Modify: `tests/test_server.py`\n\n**Acceptance Criteria:**\n- [ ] タブがないとき、`show_annotated` は `viewer.publish(capture_id, html, title または source)` を呼んでから `viewer.open_browser()` を呼び、「ブラウザで開きました: <URL>」を返す\n- [ ] タブがあるとき（publish が True）は `viewer.focus_browser()` を呼び、「既存のタブを更新しました。」を返す（ブラウザは開かない）\n- [ ] サーバー起動の `OSError` は「表示用のローカルサーバーを起動できませんでした」、ブラウザ起動の `OSError` は「ブラウザで開けませんでした: <URL>」を含むツールエラーになる\n- [ ] 未知の captureId、空・長すぎる html は今までどおりエラーで、publish されない\n- [ ] `INSTRUCTIONS` が 1 段落のまま、タブの再利用とページ上のクリックに触れている\n- [ ] `annotate.py` に `render_page`、`save_page`、`open_in_browser`、`ANNOTATION_DIR`、`KEEP_PAGES`、`_FIT_SCRIPT` が残っていない\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `66 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/server.py\", \"src/ai_desktop/annotate.py\", \"tests/test_annotate.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"タブがないとき、`show_annotated` は `viewer.publish(capture_id, html, title または source)` を呼んでから `viewer.open_browser()` を呼び、「ブラウザで開きました: <URL>」を返す\", \"タブがあるとき（publish が True）は `viewer.focus_browser()` を呼び、「既存のタブを更新しました。」を返す（ブラウザは開かない）\", \"サーバー起動の `OSError` は「表示用のローカルサーバーを起動できませんでした」、ブラウザ起動の `OSError` は「ブラウザで開けませんでした: <URL>」を含むツールエラーになる\", \"未知の captureId、空・長すぎる html は今までどおりエラーで、publish されない\", \"`INSTRUCTIONS` が 1 段落のまま、タブの再利用とページ上のクリックに触れている\", \"`annotate.py` に `render_page`、`save_page`、`open_in_browser`、`ANNOTATION_DIR`、`KEEP_PAGES`、`_FIT_SCRIPT` が残っていない\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        4
+      ]
+    },
+    {
+      "id": 6,
+      "subject": "Task 7: README と実機での通しテスト",
+      "status": "pending",
+      "description": "**Goal:** README を新しい動作に合わせ、実機の通しテスト（MCP サーバー経由でタブの再利用とページ経由のクリック・ダブルクリックの到達）を実行し、最後にユーザーにブラウザ上でのクリックを試してもらう。\n\n**Files:**\n- Create: `scripts/e2e_viewer.py`\n- Modify: `README.md`\n\n**Acceptance Criteria:**\n- [ ] README のツール表の `show_annotated` の説明、使い方の例、「既知の制限」が新しい動作に合っている（一時フォルダへの保存の記述がない）\n- [ ] `scripts/e2e_viewer.py` の出力に `first show: ブラウザで開きました: http://127.0.0.1:`、`second show: 既存のタブを更新しました。`、`click: {'ok': True, ...} {'single': 1, 'double': 0}`、`double: {'ok': True, ...} {'single': 2, 'double': 1}`、`E2E OK` が出る\n- [ ] 通しテストのあと、ビューアーのタブを撮影すると、撮り直した試験用ウィンドウ（クリック 2・ダブルクリック 1）が、黒い欠けなしで表示されている\n- [ ] ユーザーが、Claude Code から開いたページ上でクリックとダブルクリックを試し、実際の画面に伝わってページが更新されたと確認する\n\n**Verify:** `PYTHONIOENCODING=utf-8 uv run python scripts/e2e_viewer.py` → `E2E OK`\n\n```json:metadata\n{\"files\": [\"scripts/e2e_viewer.py\", \"README.md\"], \"verifyCommand\": \"PYTHONIOENCODING=utf-8 uv run python scripts/e2e_viewer.py\", \"acceptanceCriteria\": [\"README のツール表の `show_annotated` の説明、使い方の例、「既知の制限」が新しい動作に合っている（一時フォルダへの保存の記述がない）\", \"`scripts/e2e_viewer.py` の出力に `first show: ブラウザで開きました: http://127.0.0.1:`、`second show: 既存のタブを更新しました。`、`click: {'ok': True, ...} {'single': 1, 'double': 0}`、`double: {'ok': True, ...} {'single': 2, 'double': 1}`、`E2E OK` が出る\", \"通しテストのあと、ビューアーのタブを撮影すると、撮り直した試験用ウィンドウ（クリック 2・ダブルクリック 1）が、黒い欠けなしで表示されている\", \"ユーザーが、Claude Code から開いたページ上でクリックとダブルクリックを試し、実際の画面に伝わってページが更新されたと確認する\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        5
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-03T11:12:22.931468+09:00"
+}
