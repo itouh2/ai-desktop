@@ -14,6 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from ai_desktop import capture
+from ai_desktop.captures import CaptureStore
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
 
 INSTRUCTIONS = """\
@@ -25,6 +26,8 @@ capture returns a JPEG plus JSON metadata, where screen coordinates = origin + i
 coordinates / scale (physical pixels)."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
+BACKGROUND_JPEG_QUALITY = 90
+captures = CaptureStore()
 
 
 @contextmanager
@@ -39,6 +42,7 @@ def _reported() -> Iterator[None]:
 def _capture_result(image: PILImage.Image, source: str, origin_x: int, origin_y: int) -> list[Image | str]:
     shrunk, scale = shrink(image)
     meta = build_meta(source, origin_x, origin_y, image.size, shrunk.size, scale)
+    meta["captureId"] = captures.add(encode_jpeg(image, quality=BACKGROUND_JPEG_QUALITY), meta)
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(meta, ensure_ascii=False)]
 
 

@@ -9,6 +9,7 @@ from mcp import Client
 from PIL import Image
 
 from ai_desktop import capture, server
+from ai_desktop.captures import CaptureStore
 from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
 
 MONITOR = MonitorInfo(id=1, name=r"\.\DISPLAY1", primary=True, x=0, y=0, width=3200, height=1600)
@@ -42,6 +43,7 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(capture, "list_windows", lambda: [WINDOW])
     monkeypatch.setattr(capture, "capture_monitor", fake_capture_monitor)
     monkeypatch.setattr(capture, "capture_window", fake_capture_window)
+    monkeypatch.setattr(server, "captures", CaptureStore())
 
 
 def test_exposes_four_tools():
@@ -84,6 +86,7 @@ def test_capture_monitor_returns_jpeg_and_meta():
         "imageWidth": 1568,
         "imageHeight": 784,
         "scale": 0.49,
+        "captureId": "c1",
     }
 
 
@@ -120,3 +123,12 @@ def test_capture_window_rejects_empty_title(title):
     result = call("capture_window", {"title": title})
     assert result.is_error
     assert "title が空です" in result.content[0].text
+
+
+def test_captures_are_stored_with_sequential_ids():
+    first = json.loads(call("capture_monitor").content[1].text)
+    second = json.loads(call("capture_window", {"title": "excel"}).content[1].text)
+    assert (first["captureId"], second["captureId"]) == ("c1", "c2")
+    background, meta = server.captures.get("c1")
+    assert Image.open(io.BytesIO(background)).size == (3200, 1600)
+    assert meta == first
