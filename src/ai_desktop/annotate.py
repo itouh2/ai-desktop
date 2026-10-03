@@ -47,6 +47,7 @@ const token = new URLSearchParams(location.search).get("t");
 let view = null;
 let busy = false;
 let pending = null;
+let statusTimer = null;
 
 function fit() {
   if (!view) return;
@@ -56,6 +57,7 @@ function fit() {
 }
 
 function status(text, isError) {
+  clearTimeout(statusTimer);
   const box = document.getElementById("status");
   box.textContent = text;
   box.className = text ? (isError ? "show error" : "show") : "";
@@ -97,7 +99,7 @@ async function operate(event, double) {
       status(result.error, true);
     } else {
       status("クリックしました（ページは更新されません）", false);
-      setTimeout(() => status("", false), 1500);
+      statusTimer = setTimeout(() => status("", false), 1500);
     }
   } catch (error) {
     status("操作できませんでした: " + error, true);

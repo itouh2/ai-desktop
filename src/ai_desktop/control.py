@@ -132,6 +132,13 @@ def minimize(hwnd: int) -> None:
         pass
 
 
+def is_minimized(hwnd: int) -> bool:
+    try:
+        return bool(win32gui.IsIconic(hwnd))
+    except pywintypes.error:
+        return False
+
+
 def restore(hwnd: int) -> None:
     bring_to_front(hwnd)
 

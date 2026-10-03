@@ -40,8 +40,8 @@ class Viewer:
     """Serves the current view to browser tabs over SSE and performs clicks sent back from them.
 
     control is the ai_desktop.control module in production; tests pass a fake with the same
-    functions (find_window, cursor_pos, minimize, bring_to_front, window_origin, window_rect,
-    click, set_cursor, restore)."""
+    functions (find_window, cursor_pos, minimize, is_minimized, bring_to_front, window_origin,
+    window_rect, click, set_cursor, restore)."""
 
     def __init__(
         self,
@@ -153,6 +153,8 @@ class Viewer:
                     if left <= screen_x < right and top <= screen_y < bottom:
                         self._control.minimize(browser)
                         time.sleep(self._settle_seconds)
+                        if not self._control.is_minimized(browser):
+                            raise CaptureError("ブラウザを最小化できなかったため、クリックしませんでした。")
                 self._control.click(screen_x, screen_y, double)
             finally:
                 self._control.set_cursor(*cursor)

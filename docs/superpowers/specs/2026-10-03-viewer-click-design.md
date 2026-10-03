@@ -110,7 +110,7 @@ Win32 に触れるコードは `capture.py` と `control.py` にだけ置く。
 | `GET /events` | クエリ `t` と Host | SSE。接続時に現在の表示内容を送り、以後は更新のたびに `event: view` を送る。15 秒ごとに `: ping`（閉じたタブの検出） |
 | `GET /image/<captureId>` | クエリ `t` と Host | 背景の JPEG |
 | `POST /ack` | ヘッダー `X-AI-Desktop-Token`、`Origin`、Host | `{version}`：ページが表示内容を受け取ったことを知らせる |
-| `POST /click` | 同上 | `{captureId, x, y, double}` → `{ok, captureId}` または `{error}` |
+| `POST /click` | 同上 | `{captureId, x, y, double}` → `{ok}` または `{error}` |
 
 - **Host の確認**：`Host` が `127.0.0.1:<port>` と一致すること（DNS リバインディング対策）。
 - **Origin の確認**：POST の `Origin` が `http://127.0.0.1:<port>` と一致すること。独自ヘッダーが必要なので、他サイトのページからはプリフライトで止まる（CORS には応答しない）。
@@ -130,6 +130,7 @@ Win32 に触れるコードは `capture.py` と `control.py` にだけ置く。
 - `#stage` 全体でクリックを受ける。1 回目のクリックは 300ms 待ち、2 回目が来たらダブルクリックとして送る。
 - 操作中は右上に「クリック中…」を表示し、追加のクリックは無視する。エラーは赤い表示で出す。
 - Claude の HTML は `innerHTML` で差し込む。中の `<script>` は実行されず、イベント属性も CSP で止まる。
+- クリックに成功すると右上に「クリックしました（ページは更新されません）」を 1.5 秒表示する（次の表示が来たら消さない）。
 - SSE の接続が切れたら「サーバーとの接続が切れました」と表示する。
 
 ### 6.6 クリック操作（Viewer.perform_click）

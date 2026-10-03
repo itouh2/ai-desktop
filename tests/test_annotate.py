@@ -18,6 +18,13 @@ def test_viewer_shell_has_nonce_script_and_empty_stage():
     assert '"X-AI-Desktop-Token": token' in page
 
 
+def test_success_status_timer_is_cancelled_by_later_statuses():
+    page = render_shell("n0nce")
+    assert "let statusTimer = null;" in page
+    assert "clearTimeout(statusTimer)" in page
+    assert "statusTimer = setTimeout(" in page
+
+
 def test_viewer_shell_keeps_helper_classes_and_title_prefix():
     page = render_shell("n0nce")
     for selector in ("#annotations .box", "#annotations .badge", "#annotations .note", "#annotations .arrow"):

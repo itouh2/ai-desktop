@@ -18,9 +18,18 @@ class FakeControl:
     """Records every control call in order instead of touching the real desktop."""
 
     def __init__(
-        self, browser=BROWSER, origin=(100, 200), fail_origin=False, front_ok=True, browser_rect=(0, 0, 1000, 1000)
+        self,
+        browser=BROWSER,
+        origin=(100, 200),
+        fail_origin=False,
+        front_ok=True,
+        browser_rect=(0, 0, 1000, 1000),
+        minimize_ok=True,
+        fail_rect=False,
     ):
         self.calls = []
+        self.minimize_ok = minimize_ok
+        self.fail_rect = fail_rect
         self.browser_rect = browser_rect
         self.front_ok = front_ok
         self.browser = browser
@@ -38,6 +47,10 @@ class FakeControl:
     def minimize(self, hwnd):
         self.calls.append(("minimize", hwnd))
 
+    def is_minimized(self, hwnd):
+        self.calls.append(("is_minimized", hwnd))
+        return self.minimize_ok
+
     def bring_to_front(self, hwnd):
         self.calls.append(("bring_to_front", hwnd))
         return self.front_ok
@@ -50,6 +63,8 @@ class FakeControl:
 
     def window_rect(self, hwnd):
         self.calls.append(("window_rect", hwnd))
+        if self.fail_rect:
+            raise CaptureError("ブラウザのウィンドウの位置を取得できませんでした。")
         return self.browser_rect
 
     def click(self, x, y, double):
@@ -108,6 +123,22 @@ def test_monitor_click_under_the_browser_minimizes_it(viewer, control):
     assert ("click", 100, 200, True) in control.calls
     assert control.calls.index(("minimize", BROWSER)) < control.calls.index(("click", 100, 200, True))
     assert not any(call[0] in ("bring_to_front", "window_origin") for call in control.calls)
+
+
+def test_click_is_skipped_when_the_browser_cannot_be_minimized(viewer, control):
+    control.minimize_ok = False
+    with pytest.raises(CaptureError, match="最小化できなかった"):
+        viewer.perform_click("c1", 49, 98, False)
+    assert not any(call[0] == "click" for call in control.calls)
+    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
+
+
+def test_failed_browser_rect_still_restores(viewer, control):
+    control.fail_rect = True
+    with pytest.raises(CaptureError, match="位置を取得できませんでした"):
+        viewer.perform_click("c1", 49, 98, False)
+    assert not any(call[0] == "click" for call in control.calls)
+    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
 
 
 def test_monitor_click_beside_the_browser_does_not_minimize_it(viewer, control):
