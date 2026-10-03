@@ -18,6 +18,13 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+MOUSEEVENTF_ABSOLUTE = 0x8000
+SM_XVIRTUALSCREEN = 76
+SM_YVIRTUALSCREEN = 77
+SM_CXVIRTUALSCREEN = 78
+SM_CYVIRTUALSCREEN = 79
 VK_MENU = 0x12
 DOUBLE_CLICK_GAP_SECONDS = 0.05
 FOREGROUND_WAIT_SECONDS = 0.3
@@ -64,6 +71,8 @@ _user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 _user32.SetCursorPos.restype = wintypes.BOOL
 _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
+_user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+_user32.GetSystemMetrics.restype = ctypes.c_int
 
 
 def find_window(title_fragment: str) -> int | None:
@@ -127,13 +136,15 @@ def set_cursor(x: int, y: int) -> None:
 
 
 def click(x: int, y: int, double: bool = False) -> None:
-    """Left-click (or double-click) at physical screen coordinates."""
-    if not _user32.SetCursorPos(x, y):
-        raise CaptureError(f"マウスを ({x}, {y}) に移動できませんでした（Win32 エラー {ctypes.get_last_error()}）。")
-    _send(_mouse(MOUSEEVENTF_LEFTDOWN), _mouse(MOUSEEVENTF_LEFTUP))
+    """Left-click (or double-click) at physical screen coordinates.
+
+    Every event carries the absolute position, so a mouse the user is still moving
+    cannot drag the click somewhere else (seen in the smoke test, 2026-10-03)."""
+    press = (_mouse_at(x, y, MOUSEEVENTF_LEFTDOWN), _mouse_at(x, y, MOUSEEVENTF_LEFTUP))
+    _send(_mouse_at(x, y, 0), *press)
     if double:
         time.sleep(DOUBLE_CLICK_GAP_SECONDS)
-        _send(_mouse(MOUSEEVENTF_LEFTDOWN), _mouse(MOUSEEVENTF_LEFTUP))
+        _send(*press)
 
 
 def _activate(hwnd: int) -> bool:
@@ -146,9 +157,21 @@ def _activate(hwnd: int) -> bool:
     return False
 
 
-def _mouse(flags: int) -> INPUT:
+def _mouse_at(x: int, y: int, flags: int) -> INPUT:
+    """A mouse event at (x, y), normalized to 0..65535 across the virtual desktop."""
+    left = _user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    top = _user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    width = _user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+    height = _user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
     event = INPUT(type=INPUT_MOUSE)
-    event.u.mi = MOUSEINPUT(0, 0, 0, flags, 0, 0)
+    event.u.mi = MOUSEINPUT(
+        round((x - left) * 65535 / max(1, width - 1)),
+        round((y - top) * 65535 / max(1, height - 1)),
+        0,
+        flags | MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        0,
+        0,
+    )
     return event
 
 

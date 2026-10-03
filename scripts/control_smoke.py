@@ -1,5 +1,6 @@
 """Manual smoke test for control.py: foreground, minimize/restore and click a harmless window."""
 
+import ctypes
 import json
 import queue
 import subprocess
@@ -65,6 +66,22 @@ def main() -> None:
         print("after click:", latest(lines, 0.8))
         control.click(*center, double=True)
         print("after double:", latest(lines, 0.8))
+        stop = threading.Event()
+
+        def jiggle() -> None:  # a user still moving the mouse
+            while not stop.is_set():
+                control.set_cursor(*cursor)
+                time.sleep(0.001)
+
+        threading.Thread(target=jiggle, daemon=True).start()
+        gap = ctypes.windll.user32.GetDoubleClickTime() / 1000 + 0.1  # keep them single clicks
+        try:
+            for _ in range(3):
+                control.click(*center)
+                time.sleep(gap)
+        finally:
+            stop.set()
+        print("after jittered clicks:", latest(lines, 0.8))
         control.set_cursor(*cursor)
         print("cursor restored:", control.cursor_pos() == cursor)
         control.minimize(hwnd)
