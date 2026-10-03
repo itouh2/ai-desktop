@@ -46,7 +46,7 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_five_tools():
+def test_exposes_six_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
@@ -54,6 +54,7 @@ def test_exposes_five_tools():
     names = {tool.name for tool in asyncio.run(run()).tools}
     assert names == {
         "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
+        "wait_for_button",
     }
 
 
@@ -155,12 +156,23 @@ class FakeViewer:
         self.published = []
         self.opened = 0
         self.focused = 0
+        self.pressed = None
+        self.waited = []
+        self.target = Target("window", 42)
 
-    def publish(self, capture_id, html, title):
+    def publish(self, capture_id, html, title, explanation="", buttons=None):
         if self.start_error is not None:
             raise self.start_error
         self.published.append((capture_id, html, title))
+        self.last_extras = (explanation, buttons)
         return self.delivered
+
+    def wait_for_button(self, timeout):
+        self.waited.append(timeout)
+        return self.pressed
+
+    def recapture_current(self, recapture):
+        return recapture(self.target)
 
     def open_browser(self):
         if self.open_error is not None:
@@ -247,3 +259,78 @@ def test_show_annotated_reports_browser_failure(viewer):
 def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
+
+
+
+def test_show_annotated_passes_explanation_and_buttons(viewer):
+    call("capture_monitor")
+    call("show_annotated", {
+        "capture_id": "c1", "html": "<div></div>", "explanation": "設定を開く",
+        "buttons": [" できた ", "", "分からない"],
+    })
+    assert viewer.last_extras == ("設定を開く", ["できた", "分からない"])
+
+
+def test_show_annotated_defaults_to_no_explanation_or_buttons(viewer):
+    call("capture_monitor")
+    call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert viewer.last_extras == ("", [])
+
+
+@pytest.mark.parametrize("buttons, message", [
+    (["a", "b", "c", "d", "e", "f", "g"], "6 個まで"),
+    (["x" * 31], "30 文字まで"),
+    (["できた", "できた"], "同じ名前"),
+])
+def test_show_annotated_rejects_bad_buttons(viewer, buttons, message):
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>", "buttons": buttons})
+    assert result.is_error
+    assert message in result.content[0].text
+    assert viewer.published == []
+
+
+def test_wait_for_button_returns_label_and_fresh_capture(viewer):
+    call("capture_window", {"title": "excel"})
+    viewer.pressed = "分からない"
+    result = call("wait_for_button", {})
+    assert not result.is_error
+    image, text = result.content
+    assert image.type == "image"
+    meta = json.loads(text.text)
+    assert meta["pressed"] == "分からない"
+    assert meta["captureId"] == "c2"
+    assert meta["source"] == "window:42 Book1 - Excel"
+    assert viewer.waited == [90]
+
+
+def test_wait_for_button_timeout_returns_null(viewer):
+    result = call("wait_for_button", {"timeout_seconds": 5})
+    assert not result.is_error
+    assert [c.type for c in result.content] == ["text"]
+    assert json.loads(result.content[0].text) == {"pressed": None}
+
+
+@pytest.mark.parametrize("asked, used", [(500, 110), (0, 1), (30, 30)])
+def test_wait_for_button_clamps_the_timeout(viewer, asked, used):
+    call("wait_for_button", {"timeout_seconds": asked})
+    assert viewer.waited == [used]
+
+
+def test_wait_for_button_reports_viewer_errors(viewer, monkeypatch):
+    def no_buttons(timeout):
+        raise CaptureError("表示中のページにボタンがありません。")
+
+    monkeypatch.setattr(viewer, "wait_for_button", no_buttons)
+    result = call("wait_for_button", {})
+    assert result.is_error
+    assert "ボタンがありません" in result.content[0].text
+
+
+def test_recapture_takes_the_same_target_again():
+    call("capture_window", {"title": "excel"})
+    shrunk, meta = server._recapture(Target("window", 42))
+    assert meta["captureId"] == "c2"
+    assert server.captures.target("c2") == Target("window", 42)
+    assert meta["source"] == "window:42 Book1 - Excel"
+    assert shrunk.size == (800, 600)

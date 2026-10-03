@@ -27,12 +27,21 @@ capture returns a JPEG plus JSON metadata, where screen coordinates = origin + i
 coordinates / scale (physical pixels). To point at things on screen, call \
 show_annotated with the capture's captureId and HTML positioned in that image's pixel \
 coordinates; it shows in the user's browser, reusing the open viewer tab, and the user \
-can click on the page to click the real screen."""
+can click on the page to click the real screen. When an interaction on that page helps \
+(guiding steps, letting the user pick an option, getting a confirmation), pass buttons \
+(and an explanation) to show_annotated and call wait_for_button; you get the pressed \
+label plus a fresh capture of the same target, so react to it and, to keep going, show \
+new buttons and wait again. If it returns {"pressed": null}, just call it again; stop \
+when the user starts talking about something else in the chat."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
 captures = CaptureStore()
 MAX_HTML_CHARS = 100_000
+MAX_BUTTONS = 6
+MAX_BUTTON_CHARS = 30
+WAIT_DEFAULT_SECONDS = 90
+WAIT_MAX_SECONDS = 110
 
 
 @contextmanager
@@ -52,6 +61,29 @@ def _store_capture(
     meta = build_meta(source, origin_x, origin_y, image.size, shrunk.size, scale)
     meta["captureId"] = captures.add(encode_jpeg(image, quality=BACKGROUND_JPEG_QUALITY), meta, target)
     return shrunk, meta
+
+
+def _recapture(target: Target) -> tuple[PILImage.Image, dict]:
+    """Capture the same monitor or window again; returns (shrunk image, meta)."""
+    if target.kind == "monitor":
+        image, monitor = capture.capture_monitor(target.id)
+        source, origin = f"monitor:{monitor.id} {monitor.name}", (monitor.x, monitor.y)
+    else:
+        image, window = capture.capture_window(target.id)
+        source, origin = f"window:{window.id} {window.title}", (window.x, window.y)
+    return _store_capture(image, source, *origin, target)
+
+
+def _clean_buttons(buttons: list[str] | None) -> list[str]:
+    labels = [label.strip() for label in buttons or [] if label.strip()]
+    if len(labels) > MAX_BUTTONS:
+        raise ToolError(f"buttons は {MAX_BUTTONS} 個までです（{len(labels)} 個）。")
+    too_long = [label for label in labels if len(label) > MAX_BUTTON_CHARS]
+    if too_long:
+        raise ToolError(f"ボタン名は {MAX_BUTTON_CHARS} 文字までです: {too_long[0]}")
+    if len(set(labels)) != len(labels):
+        raise ToolError("同じ名前のボタンがあります。名前は重ならないようにしてください。")
+    return labels
 
 
 def _capture_result(
@@ -113,7 +145,13 @@ def capture_window(window_id: int | None = None, title: str | None = None) -> li
 
 
 @mcp.tool(structured_output=False)
-def show_annotated(capture_id: str, html: str, title: str | None = None) -> str:
+def show_annotated(
+    capture_id: str,
+    html: str,
+    title: str | None = None,
+    explanation: str | None = None,
+    buttons: list[str] | None = None,
+) -> str:
     """Show the user one of your captures with your annotations drawn on top, in their
     default browser. Use it when pointing at places on screen makes your advice clearer.
     An open viewer tab is reused. The user can click or double-click on the page to click
@@ -127,15 +165,18 @@ def show_annotated(capture_id: str, html: str, title: str | None = None) -> str:
     center), .note (callout; left/top is its top-left corner), and for arrows
     <svg class="layer"><line class="arrow" x1=".." y1=".." x2=".." y2=".."/></svg>
     (svg.layer covers the image, in image pixels). Scripts and external resources are
-    blocked. title: optional page title."""
+    blocked. title: optional page title. explanation: optional plain text shown beside the
+    image. buttons: optional labels (up to 6, 30 chars each) shown above the image; after
+    showing them, call wait_for_button to learn which one the user pressed."""
     if not html.strip():
         raise ToolError("html が空です。枠や注釈の HTML を指定してください。")
     if len(html) > MAX_HTML_CHARS:
         raise ToolError(f"html が長すぎます（{len(html)} 文字）。{MAX_HTML_CHARS} 文字以内にしてください。")
+    labels = _clean_buttons(buttons)
     with _reported():
         _, meta = captures.get(capture_id)
         try:
-            delivered = viewer.publish(capture_id, html, title or meta["source"])
+            delivered = viewer.publish(capture_id, html, title or meta["source"], explanation or "", labels)
         except OSError as error:
             raise ToolError(f"表示用のローカルサーバーを起動できませんでした: {error}") from error
     if delivered:
@@ -146,6 +187,23 @@ def show_annotated(capture_id: str, html: str, title: str | None = None) -> str:
     except OSError as error:
         raise ToolError(f"ブラウザで開けませんでした: {viewer.url}（{error}）") from error
     return f"ブラウザで開きました: {viewer.url}"
+
+
+
+@mcp.tool()
+def wait_for_button(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image | str]:
+    """Wait until the user presses one of the buttons on the page shown by show_annotated
+    (call it right after showing buttons). Returns {"pressed": "<label>", ...metadata} plus a
+    fresh JPEG of the same window or monitor, taken when the button was pressed. Returns
+    {"pressed": null} after timeout_seconds (1-110, default 90); then just call it again."""
+    timeout = max(1, min(WAIT_MAX_SECONDS, int(timeout_seconds)))
+    with _reported():
+        label = viewer.wait_for_button(timeout)
+        if label is None:
+            return [json.dumps({"pressed": None})]
+        shrunk, meta = viewer.recapture_current(_recapture)
+    result = {"pressed": label, **meta}
+    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
 
 
 def main() -> None:
