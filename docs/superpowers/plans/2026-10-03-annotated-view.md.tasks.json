@@ -1,0 +1,39 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-03-annotated-view.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: CaptureStore と captureId",
+      "status": "completed",
+      "description": "**Goal:** 撮影画像を元の解像度の JPEG にして `CaptureStore` に保存し、撮影ツールのメタデータに `captureId` を付けて返す。\n\n**Files:**\n- Create: `src/ai_desktop/captures.py`\n- Modify: `src/ai_desktop/server.py`（import、`BACKGROUND_JPEG_QUALITY`、`captures`、`_capture_result`）\n- Test: `tests/test_captures.py`\n- Modify: `tests/test_server.py`（fixture、メタデータの期待値、新テスト1件）\n\n**Acceptance Criteria:**\n- [ ] `CaptureStore.add` が `c1`、`c2`… と連番の id を返す\n- [ ] `CaptureStore.get` が保存した `(bytes, dict)` をそのまま返す\n- [ ] `limit` を超えると最古のものが消え、`get` で `CaptureError` になる\n- [ ] 未知の id の `CaptureError` に、その id・保持中の id 一覧・「撮影し直して」が含まれる\n- [ ] `capture_monitor` のメタデータが、既存の8キーに `\"captureId\": \"c1\"` を加えた9キーになる\n- [ ] 2回撮影すると `c1`、`c2` になり、ストアの背景が元の解像度（3200×1600）の JPEG になっている\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `33 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/captures.py\", \"src/ai_desktop/server.py\", \"tests/test_captures.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"`CaptureStore.add` が `c1`、`c2`… と連番の id を返す\", \"`CaptureStore.get` が保存した `(bytes, dict)` をそのまま返す\", \"`limit` を超えると最古のものが消え、`get` で `CaptureError` になる\", \"未知の id の `CaptureError` に、その id・保持中の id 一覧・「撮影し直して」が含まれる\", \"`capture_monitor` のメタデータが、既存の8キーに `\\\"captureId\\\": \\\"c1\\\"` を加えた9キーになる\", \"2回撮影すると `c1`、`c2` になり、ストアの背景が元の解像度（3200×1600）の JPEG になっている\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: 注釈ページの生成と保存",
+      "status": "completed",
+      "description": "**Goal:** 背景画像の上に Claude の HTML を重ねる1ファイル完結のページを生成し（CSP・部品クラス・矢じりマーカー・幅合わせスクリプト付き）、一時フォルダに保存して古いものを削除する `annotate.py` を作る。\n\n**Files:**\n- Create: `src/ai_desktop/annotate.py`\n- Test: `tests/test_annotate.py`\n\n**Acceptance Criteria:**\n- [ ] ページに、CSP 文字列 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-<nonce>'` と `<script nonce=\"<nonce>\">` が入る\n- [ ] `#stage` の style が `width:<imageWidth>px;height:<imageHeight>px` になる\n- [ ] 背景が `data:image/jpeg;base64,...` で埋め込まれる\n- [ ] Claude の HTML が `#annotations` にそのまま入り、`title` は HTML エスケープされる\n- [ ] `.box`、`.badge`、`.note`、`.arrow`、`svg.layer` の CSS と `id=\"arrowhead\"` のマーカーが入る\n- [ ] `save_page` が `annotated-*.html` を書いてパスを返し、新しいものを含めて `keep` 件だけ残す。無関係なファイルは消さない\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `40 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/annotate.py\", \"tests/test_annotate.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"ページに、CSP 文字列 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-<nonce>'` と `<script nonce=\\\"<nonce>\\\">` が入る\", \"`#stage` の style が `width:<imageWidth>px;height:<imageHeight>px` になる\", \"背景が `data:image/jpeg;base64,...` で埋め込まれる\", \"Claude の HTML が `#annotations` にそのまま入り、`title` は HTML エスケープされる\", \"`.box`、`.badge`、`.note`、`.arrow`、`svg.layer` の CSS と `id=\\\"arrowhead\\\"` のマーカーが入る\", \"`save_page` が `annotated-*.html` を書いてパスを返し、新しいものを含めて `keep` 件だけ残す。無関係なファイルは消さない\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: show_annotated ツール",
+      "status": "completed",
+      "description": "**Goal:** `show_annotated(capture_id, html, title=None)` を MCP ツールとして公開し、ページを保存してブラウザで開く。サーバーの説明文でも、このツールの使い方を Claude に伝える。\n\n**Files:**\n- Modify: `src/ai_desktop/server.py`（import、`INSTRUCTIONS`、`MAX_HTML_CHARS`、`show_annotated`）\n- Modify: `tests/test_server.py`（ツール数のテスト、新テスト4件）\n\n**Acceptance Criteria:**\n- [ ] `list_tools` が5つ（既存4つ＋`show_annotated`）を返す\n- [ ] `show_annotated` が `annotate.ANNOTATION_DIR` にページを書き、`annotate.open_in_browser` をそのパスで1回呼び、結果テキストにそのパスが入る\n- [ ] ページの `#stage` が撮影画像のサイズ（800×600）、`<title>` が `title` 省略時にメタデータの `source` になる\n- [ ] 未知の `capture_id` は、その id を含む `isError` 結果になり、ブラウザは開かない\n- [ ] 空・空白だけの `html` は「html が空です」を含む `isError` 結果になり、ブラウザは開かない\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `44 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/server.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"`list_tools` が5つ（既存4つ＋`show_annotated`）を返す\", \"`show_annotated` が `annotate.ANNOTATION_DIR` にページを書き、`annotate.open_in_browser` をそのパスで1回呼び、結果テキストにそのパスが入る\", \"ページの `#stage` が撮影画像のサイズ（800×600）、`<title>` が `title` 省略時にメタデータの `source` になる\", \"未知の `capture_id` は、その id を含む `isError` 結果になり、ブラウザは開かない\", \"空・空白だけの `html` は「html が空です」を含む `isError` 結果になり、ブラウザは開かない\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: README と実機での表示確認",
+      "status": "completed",
+      "description": "**Goal:** README に `show_annotated` と一時フォルダへの保存を書き足し、headless の Claude Code で「撮影 → 注釈付き表示」を実行して、ブラウザ上で注釈が狙った位置に重なっていることを、ブラウザウィンドウの撮影画像で確認する。\n\n**Files:**\n- Modify: `README.md`\n\n**Acceptance Criteria:**\n- [ ] README のツール表に `show_annotated` の行があり、使い方の例に注釈表示の例がある\n- [ ] README の「既知の制限」の「スクショはディスクに保存しません。」が、「撮影ツールはディスクに保存しません。`show_annotated` のページ（スクショ入り）は `%TEMP%\\ai-desktop\\annotations\\` に直近30件まで保存されます。」に置き換わっている\n- [ ] `claude -p` の実行で `capture_window` → `show_annotated` が呼ばれ、ツールの結果に `ブラウザで表示しました:` が含まれる\n- [ ] `%TEMP%\\ai-desktop\\annotations\\` に新しい `annotated-*.html` ができている\n- [ ] 開いたブラウザのウィンドウ（タイトルに `ai-desktop 注釈テスト` を含む）を撮影した画像で、VS Code のスクショの上に、赤枠・番号・吹き出し・矢印が表示されている。赤枠がエクスプローラー領域を、吹き出しがエディタ領域を指している（目視）\n\n**Verify:** Step 3 の `claude -p` の出力に `show_annotated` の呼び出しと `ブラウザで表示しました:` が含まれる。Step 4 で撮ったブラウザ画像を Read で開き、注釈の位置を目視で確認する。\n\n```json:metadata\n{\"files\": [\"README.md\"], \"verifyCommand\": \"claude -p ... (Task 4 Step 3) then capture browser window (Step 4)\", \"acceptanceCriteria\": [\"README のツール表に `show_annotated` の行があり、使い方の例に注釈表示の例がある\", \"README の「既知の制限」の「スクショはディスクに保存しません。」が、「撮影ツールはディスクに保存しません。`show_annotated` のページ（スクショ入り）は `%TEMP%\\\\ai-desktop\\\\annotations\\\\` に直近30件まで保存されます。」に置き換わっている\", \"`claude -p` の実行で `capture_window` → `show_annotated` が呼ばれ、ツールの結果に `ブラウザで表示しました:` が含まれる\", \"`%TEMP%\\\\ai-desktop\\\\annotations\\\\` に新しい `annotated-*.html` ができている\", \"開いたブラウザのウィンドウ（タイトルに `ai-desktop 注釈テスト` を含む）を撮影した画像で、VS Code のスクショの上に、赤枠・番号・吹き出し・矢印が表示されている。赤枠がエクスプローラー領域を、吹き出しがエディタ領域を指している（目視）\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-03T10:32:26.494259+09:00"
+}

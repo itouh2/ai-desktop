@@ -8,7 +8,8 @@ import pytest
 from mcp import Client
 from PIL import Image
 
-from ai_desktop import capture, server
+from ai_desktop import annotate, capture, server
+from ai_desktop.captures import CaptureStore
 from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
 
 MONITOR = MonitorInfo(id=1, name=r"\.\DISPLAY1", primary=True, x=0, y=0, width=3200, height=1600)
@@ -42,15 +43,18 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(capture, "list_windows", lambda: [WINDOW])
     monkeypatch.setattr(capture, "capture_monitor", fake_capture_monitor)
     monkeypatch.setattr(capture, "capture_window", fake_capture_window)
+    monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_four_tools():
+def test_exposes_five_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
 
     names = {tool.name for tool in asyncio.run(run()).tools}
-    assert names == {"list_monitors", "list_windows", "capture_monitor", "capture_window"}
+    assert names == {
+        "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
+    }
 
 
 def test_list_monitors_returns_json():
@@ -84,6 +88,7 @@ def test_capture_monitor_returns_jpeg_and_meta():
         "imageWidth": 1568,
         "imageHeight": 784,
         "scale": 0.49,
+        "captureId": "c1",
     }
 
 
@@ -120,3 +125,98 @@ def test_capture_window_rejects_empty_title(title):
     result = call("capture_window", {"title": title})
     assert result.is_error
     assert "title が空です" in result.content[0].text
+
+
+def test_captures_are_stored_with_sequential_ids():
+    first = json.loads(call("capture_monitor").content[1].text)
+    second = json.loads(call("capture_window", {"title": "excel"}).content[1].text)
+    assert (first["captureId"], second["captureId"]) == ("c1", "c2")
+    background, meta = server.captures.get("c1")
+    assert Image.open(io.BytesIO(background)).size == (3200, 1600)
+    assert meta == first
+
+
+@pytest.fixture
+def opened(monkeypatch, tmp_path):
+    paths = []
+    monkeypatch.setattr(annotate, "ANNOTATION_DIR", tmp_path)
+    monkeypatch.setattr(annotate, "open_in_browser", paths.append)
+    return paths
+
+
+def test_show_annotated_writes_page_and_opens_browser(opened, tmp_path):
+    call("capture_window", {"title": "excel"})
+    badge = '<div class="badge" style="left:5px;top:5px">1</div>'
+    result = call("show_annotated", {"capture_id": "c1", "html": badge})
+    assert not result.is_error
+    assert len(opened) == 1
+    path = opened[0]
+    assert path.parent == tmp_path
+    assert str(path) in result.content[0].text
+    page = path.read_text(encoding="utf-8")
+    assert badge in page
+    assert 'id="stage" style="width:800px;height:600px"' in page
+    assert "<title>window:42 Book1 - Excel</title>" in page
+
+
+def test_show_annotated_unknown_capture_is_reported(opened):
+    result = call("show_annotated", {"capture_id": "c99", "html": "<div></div>"})
+    assert result.is_error
+    assert "c99" in result.content[0].text
+    assert opened == []
+
+
+@pytest.mark.parametrize("html", ["", "   "])
+def test_show_annotated_rejects_empty_html(opened, html):
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": html})
+    assert result.is_error
+    assert "html が空です" in result.content[0].text
+    assert opened == []
+
+
+@pytest.mark.parametrize("length, expected_error", [(100_000, False), (100_001, True)])
+def test_show_annotated_html_length_limit(opened, length, expected_error):
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "x" * length})
+    assert result.is_error is expected_error
+    if expected_error:
+        assert "html が長すぎます" in result.content[0].text
+        assert opened == []
+    else:
+        assert len(opened) == 1
+
+
+def test_instructions_are_one_paragraph():
+    assert "\n" not in server.INSTRUCTIONS
+    assert "show_annotated" in server.INSTRUCTIONS
+
+
+def test_show_annotated_reports_save_failure(opened, monkeypatch):
+    def fail(page, directory):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(annotate, "save_page", fail)
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert result.is_error
+    assert "注釈ページを保存できませんでした" in result.content[0].text
+    assert "disk full" in result.content[0].text
+    assert opened == []
+
+
+def test_show_annotated_reports_browser_failure(monkeypatch, tmp_path):
+    def fail(path):
+        raise OSError("no association")
+
+    monkeypatch.setattr(annotate, "ANNOTATION_DIR", tmp_path)
+    monkeypatch.setattr(annotate, "open_in_browser", fail)
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert result.is_error
+    text = result.content[0].text
+    assert "ブラウザで開けませんでした" in text
+    assert "no association" in text
+    pages = list(tmp_path.glob("annotated-*.html"))
+    assert len(pages) == 1
+    assert pages[0].name in text
