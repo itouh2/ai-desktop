@@ -54,6 +54,126 @@ addEventListener("DOMContentLoaded", fit);
 addEventListener("resize", fit);
 """
 
+VIEWER_TITLE_PREFIX = "ai-desktop | "
+
+_VIEWER_CSS = """
+#stage { cursor: crosshair; }
+#status { position: fixed; top: 12px; right: 12px; z-index: 10; display: none; padding: 8px 14px;
+  border-radius: 6px; background: rgba(0, 0, 0, 0.78); color: #fff;
+  font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
+#status.show { display: block; }
+#status.error { background: #e5484d; }
+"""
+
+# The live viewer: receives views over SSE, scales the stage, and posts clicks back.
+_VIEWER_SCRIPT = """
+const token = new URLSearchParams(location.search).get("t");
+let view = null;
+let busy = false;
+let pending = null;
+
+function fit() {
+  if (!view) return;
+  const scale = document.documentElement.clientWidth / view.width;
+  document.getElementById("stage").style.transform = "scale(" + scale + ")";
+  document.getElementById("viewport").style.height = view.height * scale + "px";
+}
+
+function status(text, isError) {
+  const box = document.getElementById("status");
+  box.textContent = text;
+  box.className = text ? (isError ? "show error" : "show") : "";
+}
+
+function render(next) {
+  view = next;
+  document.title = "ai-desktop | " + next.title;
+  const stage = document.getElementById("stage");
+  stage.style.width = next.width + "px";
+  stage.style.height = next.height + "px";
+  document.getElementById("shot").src =
+    "/image/" + encodeURIComponent(next.captureId) + "?t=" + encodeURIComponent(token);
+  document.getElementById("annotations").innerHTML = next.html;
+  status("", false);
+  fit();
+}
+
+function post(path, body) {
+  return fetch(path + "?t=" + encodeURIComponent(token), {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "X-AI-Desktop-Token": token},
+    body: JSON.stringify(body),
+  });
+}
+
+async function operate(event, double) {
+  if (!view || busy) return;
+  const rect = document.getElementById("stage").getBoundingClientRect();
+  const scale = rect.width / view.width;
+  const x = (event.clientX - rect.left) / scale;
+  const y = (event.clientY - rect.top) / scale;
+  busy = true;
+  status(double ? "ダブルクリック中…" : "クリック中…", false);
+  try {
+    const response = await post("/click", {captureId: view.captureId, x: x, y: y, double: double});
+    const result = await response.json();
+    status(result.error || "", Boolean(result.error));
+  } catch (error) {
+    status("操作できませんでした: " + error, true);
+  } finally {
+    busy = false;
+  }
+}
+
+addEventListener("DOMContentLoaded", () => {
+  document.getElementById("stage").addEventListener("click", (event) => {
+    clearTimeout(pending);
+    if (event.detail >= 2) {
+      operate(event, true);
+      return;
+    }
+    pending = setTimeout(() => operate(event, false), 300);
+  });
+  const events = new EventSource("/events?t=" + encodeURIComponent(token));
+  events.addEventListener("view", (event) => {
+    const next = JSON.parse(event.data);
+    render(next);
+    post("/ack", {version: next.version});
+  });
+  events.addEventListener("error", () => {
+    status("サーバーとの接続が切れました。Claude Code のセッションを確認してください。", true);
+  });
+});
+addEventListener("resize", fit);
+"""
+
+
+def content_security_policy(nonce: str) -> str:
+    """CSP for the viewer page: only its own nonce'd script, same-origin images and requests."""
+    return (
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+        f"script-src 'nonce-{nonce}'; connect-src 'self'"
+    )
+
+
+def render_shell(nonce: str) -> str:
+    """The viewer page skeleton; content arrives over /events and is drawn by the script."""
+    return (
+        "<!doctype html>\n"
+        '<html lang="ja"><head><meta charset="utf-8">\n'
+        "<title>ai-desktop</title>\n"
+        f"<style>{_CSS}{_VIEWER_CSS}</style>\n"
+        f'<script nonce="{nonce}">{_VIEWER_SCRIPT}</script>\n'
+        "</head><body>\n"
+        f"{_ARROWHEAD}\n"
+        '<div id="status"></div>\n'
+        '<div id="viewport"><div id="stage">'
+        '<img id="shot" alt="">'
+        '<div id="annotations"></div>'
+        "</div></div>\n"
+        "</body></html>\n"
+    )
+
 
 def render_page(
     background_jpeg: bytes,
