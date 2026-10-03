@@ -1,0 +1,27 @@
+[project]
+name = "ai-desktop"
+version = "0.1.0"
+description = "MCP server that lets Claude Code see the Windows desktop"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.3,<3",
+    "mss>=10.2",
+    "pillow>=12.0",
+    "pywin32>=312; sys_platform == 'win32'",
+]
+
+[project.scripts]
+ai-desktop = "ai_desktop.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_desktop"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
