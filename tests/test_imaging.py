@@ -66,3 +66,9 @@ def test_image_to_screen_applies_origin_and_scale():
     _, _, scale = fit_size(3840, 2560)
     corner = build_meta("monitor:1", 0, 0, (3840, 2560), (1568, 1045), scale)
     assert image_to_screen(corner, 1568, 0) == (3840, 0)
+
+
+def test_image_to_screen_can_use_a_newer_origin():
+    meta = build_meta("window:42 Excel", -100, 50, (1600, 900), (800, 450), 0.5)
+    assert image_to_screen(meta, 10, 20) == (-80, 90)
+    assert image_to_screen(meta, 10, 20, origin=(300, 400)) == (320, 440)

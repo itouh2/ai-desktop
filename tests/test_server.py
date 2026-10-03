@@ -9,7 +9,7 @@ from mcp import Client
 from PIL import Image
 
 from ai_desktop import annotate, capture, server
-from ai_desktop.captures import CaptureStore
+from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
 
 MONITOR = MonitorInfo(id=1, name=r"\.\DISPLAY1", primary=True, x=0, y=0, width=3200, height=1600)
@@ -134,6 +134,21 @@ def test_captures_are_stored_with_sequential_ids():
     background, meta = server.captures.get("c1")
     assert Image.open(io.BytesIO(background)).size == (3200, 1600)
     assert meta == first
+
+
+def test_captures_record_their_target():
+    call("capture_monitor")
+    call("capture_window", {"title": "excel"})
+    assert server.captures.target("c1") == Target("monitor", 1)
+    assert server.captures.target("c2") == Target("window", 42)
+
+
+def test_recapture_takes_the_same_target_again():
+    call("capture_window", {"title": "excel"})
+    new_id = server._recapture(Target("window", 42))
+    assert new_id == "c2"
+    assert server.captures.target(new_id) == Target("window", 42)
+    assert server.captures.get(new_id)[1]["source"] == "window:42 Book1 - Excel"
 
 
 @pytest.fixture

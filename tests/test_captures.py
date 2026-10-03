@@ -1,6 +1,6 @@
 import pytest
 
-from ai_desktop.captures import CaptureStore
+from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError
 
 
@@ -48,3 +48,18 @@ def test_unknown_id_lists_available_ids():
     assert "c9" in message
     assert "c1, c2" in message
     assert "撮影し直して" in message
+
+
+def test_target_is_stored_with_the_capture():
+    store = CaptureStore()
+    capture_id = store.add(b"jpeg", {}, Target("window", 42))
+    assert store.target(capture_id) == Target("window", 42)
+
+
+def test_target_missing_or_unknown_is_an_error():
+    store = CaptureStore()
+    capture_id = store.add(b"jpeg", {})
+    with pytest.raises(CaptureError, match="操作の対象を記録していません"):
+        store.target(capture_id)
+    with pytest.raises(CaptureError, match="c9"):
+        store.target("c9")

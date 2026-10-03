@@ -15,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from ai_desktop import annotate, capture
-from ai_desktop.captures import CaptureStore
+from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
 
 INSTRUCTIONS = """\
@@ -43,12 +43,32 @@ def _reported() -> Iterator[None]:
         raise ToolError(str(error)) from error
 
 
-def _capture_result(image: PILImage.Image, source: str, origin_x: int, origin_y: int) -> list[Image | str]:
+def _store_capture(
+    image: PILImage.Image, source: str, origin_x: int, origin_y: int, target: Target
+) -> tuple[PILImage.Image, dict]:
+    """Shrink for the model, keep the full-resolution background, and return (shrunk, meta)."""
     shrunk, scale = shrink(image)
     meta = build_meta(source, origin_x, origin_y, image.size, shrunk.size, scale)
-    capture_id = captures.add(encode_jpeg(image, quality=BACKGROUND_JPEG_QUALITY), meta)
-    meta["captureId"] = capture_id
+    meta["captureId"] = captures.add(encode_jpeg(image, quality=BACKGROUND_JPEG_QUALITY), meta, target)
+    return shrunk, meta
+
+
+def _capture_result(
+    image: PILImage.Image, source: str, origin_x: int, origin_y: int, target: Target
+) -> list[Image | str]:
+    shrunk, meta = _store_capture(image, source, origin_x, origin_y, target)
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(meta, ensure_ascii=False)]
+
+
+def _recapture(target: Target) -> str:
+    """Capture the same monitor or window again; returns the new captureId."""
+    if target.kind == "monitor":
+        image, monitor = capture.capture_monitor(target.id)
+        source, origin = f"monitor:{monitor.id} {monitor.name}", (monitor.x, monitor.y)
+    else:
+        image, window = capture.capture_window(target.id)
+        source, origin = f"window:{window.id} {window.title}", (window.x, window.y)
+    return _store_capture(image, source, *origin, target)[1]["captureId"]
 
 
 @mcp.tool(structured_output=False)
@@ -74,7 +94,9 @@ def capture_monitor(monitor_id: int | None = None) -> list[Image | str]:
     Returns a JPEG and JSON metadata; screen coordinates = origin + image coordinates / scale."""
     with _reported():
         image, monitor = capture.capture_monitor(monitor_id)
-    return _capture_result(image, f"monitor:{monitor.id} {monitor.name}", monitor.x, monitor.y)
+    return _capture_result(
+        image, f"monitor:{monitor.id} {monitor.name}", monitor.x, monitor.y, Target("monitor", monitor.id)
+    )
 
 
 @mcp.tool()
@@ -92,7 +114,9 @@ def capture_window(window_id: int | None = None, title: str | None = None) -> li
         if window_id is None:
             window_id = select_window(capture.list_windows(), title).id
         image, window = capture.capture_window(window_id)
-    return _capture_result(image, f"window:{window.id} {window.title}", window.x, window.y)
+    return _capture_result(
+        image, f"window:{window.id} {window.title}", window.x, window.y, Target("window", window.id)
+    )
 
 
 @mcp.tool(structured_output=False)

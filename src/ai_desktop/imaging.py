@@ -88,11 +88,16 @@ def build_meta(
     }
 
 
-def image_to_screen(meta: dict, x: float, y: float) -> tuple[int, int]:
-    """Map a point on the returned image back to physical screen coordinates."""
+def image_to_screen(
+    meta: dict, x: float, y: float, origin: tuple[int, int] | None = None
+) -> tuple[int, int]:
+    """Map a point on the returned image back to physical screen coordinates.
+
+    origin replaces the capture-time origin, e.g. for a window that has moved since."""
+    origin_x, origin_y = origin if origin is not None else (meta["originX"], meta["originY"])
     return (
-        round(meta["originX"] + x / meta["scale"]),
-        round(meta["originY"] + y / meta["scale"]),
+        round(origin_x + x / meta["scale"]),
+        round(origin_y + y / meta["scale"]),
     )
 
 
