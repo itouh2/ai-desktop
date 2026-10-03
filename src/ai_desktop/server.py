@@ -77,6 +77,8 @@ def capture_window(window_id: int | None = None, title: str | None = None) -> li
     image coordinates / scale."""
     if (window_id is None) == (title is None):
         raise ToolError("window_id と title のどちらか一方だけを指定してください。")
+    if title is not None and not title.strip():
+        raise ToolError("title が空です。ウィンドウのタイトルの一部を指定してください。")
     with _reported():
         if window_id is None:
             window_id = select_window(capture.list_windows(), title).id

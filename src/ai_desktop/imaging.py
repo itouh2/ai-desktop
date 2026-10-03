@@ -59,6 +59,7 @@ def shrink(image: Image.Image, max_edge: int = MAX_EDGE) -> tuple[Image.Image, f
 
 
 def encode_jpeg(image: Image.Image, quality: int = JPEG_QUALITY) -> bytes:
+    """Encode as JPEG bytes, converting to RGB first when needed."""
     if image.mode != "RGB":
         image = image.convert("RGB")
     buffer = io.BytesIO()

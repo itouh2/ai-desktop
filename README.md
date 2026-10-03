@@ -24,7 +24,7 @@ claude mcp add --scope user desktop -- uv run --directory C:/Works/2026/ai-deskt
 claude mcp list   # desktop が ✓ Connected になっていれば OK
 ```
 
-登録後、Claude Code のセッションを開き直すとツールが使えるようになります。撮影のたびに Claude Code の許可確認が出ます。
+登録後、Claude Code のセッションを開き直すとツールが使えるようになります。初回は Claude Code の許可確認が出ます（「常に許可」を選ぶと、以降は確認なしで撮影されます）。
 
 ## 使い方の例
 
@@ -37,7 +37,7 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 | ツール | 内容 |
 |---|---|
 | `list_monitors` | モニター一覧（id・名前・プライマリか・位置とサイズ） |
-| `list_windows` | 表示中のウィンドウ一覧（id・タイトル・アプリ・位置とサイズ・最小化中か・アクティブか） |
+| `list_windows` | 表示中のウィンドウ一覧（最小化中も含む。id・タイトル・アプリ・位置とサイズ・最小化中か・アクティブか） |
 | `capture_monitor` | モニター全体を撮影（省略時はプライマリ） |
 | `capture_window` | ウィンドウを撮影（`window_id` か `title` の部分一致） |
 

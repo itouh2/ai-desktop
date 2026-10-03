@@ -43,6 +43,17 @@ def test_ambiguous_match_lists_candidates():
     assert "window_id" in message
     assert "id=3" in message
     assert "id=5" in message
+    assert "ChatGPT - Google Chrome" in message
+
+
+def test_identical_titles_are_ambiguous():
+    twins = [window(1, "ChatGPT"), window(2, "ChatGPT"), window(3, "Notes")]
+    with pytest.raises(CaptureError) as error:
+        select_window(twins, "ChatGPT")
+    message = str(error.value)
+    assert "id=1" in message
+    assert "id=2" in message
+    assert "id=3" not in message
 
 
 def test_candidate_list_is_capped():

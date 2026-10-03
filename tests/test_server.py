@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import io
 import json
 from dataclasses import asdict
 
@@ -69,7 +71,11 @@ def test_capture_monitor_returns_jpeg_and_meta():
     image, text = result.content
     assert image.type == "image"
     assert image.mime_type == "image/jpeg"
-    assert json.loads(text.text) == {
+    decoded = Image.open(io.BytesIO(base64.b64decode(image.data)))
+    assert decoded.format == "JPEG"
+    meta = json.loads(text.text)
+    assert decoded.size == (meta["imageWidth"], meta["imageHeight"])
+    assert meta == {
         "source": r"monitor:1 \.\DISPLAY1",
         "originX": 0,
         "originY": 0,
@@ -101,3 +107,16 @@ def test_capture_error_message_reaches_the_model():
     result = call("capture_window", {"window_id": 7})
     assert result.is_error
     assert "window_id 7 のウィンドウは存在しません" in result.content[0].text
+
+
+def test_capture_monitor_unknown_id_is_reported():
+    result = call("capture_monitor", {"monitor_id": 9})
+    assert result.is_error
+    assert "monitor_id 9 は存在しません" in result.content[0].text
+
+
+@pytest.mark.parametrize("title", ["", "  "])
+def test_capture_window_rejects_empty_title(title):
+    result = call("capture_window", {"title": title})
+    assert result.is_error
+    assert "title が空です" in result.content[0].text

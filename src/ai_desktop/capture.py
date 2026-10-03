@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+import logging
+import threading
 from ctypes import wintypes
 
 import mss
@@ -17,10 +19,16 @@ from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
 
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 PROCESS_PER_MONITOR_DPI_AWARE = 2
+DPI_AWARENESS_PER_MONITOR = 2
 DWMWA_CLOAKED = 14
 MONITORINFOF_PRIMARY = 1
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PW_RENDERFULLCONTENT = 2
+
+_log = logging.getLogger(__name__)
+# mcp runs sync tools on worker threads and clients may call tools in parallel;
+# GDI capture is serialized so two captures never interleave.
+_capture_lock = threading.Lock()
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -28,6 +36,10 @@ _dwmapi = ctypes.WinDLL("dwmapi")
 
 _user32.SetProcessDpiAwarenessContext.argtypes = [wintypes.HANDLE]
 _user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+_user32.GetThreadDpiAwarenessContext.argtypes = []
+_user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+_user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+_user32.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
 _user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
 _user32.PrintWindow.restype = wintypes.BOOL
 _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
@@ -48,9 +60,15 @@ _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
 def enable_dpi_awareness() -> None:
     """Make every API in this process speak physical pixels (spec §6.3)."""
     context = ctypes.c_void_p(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
-    if _user32.SetProcessDpiAwarenessContext(context):
-        return
-    ctypes.WinDLL("shcore").SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
+    if not _user32.SetProcessDpiAwarenessContext(context):
+        ctypes.WinDLL("shcore").SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
+    awareness = _user32.GetAwarenessFromDpiAwarenessContext(_user32.GetThreadDpiAwarenessContext())
+    if awareness != DPI_AWARENESS_PER_MONITOR:
+        _log.warning(
+            "Process is not per-monitor DPI aware (awareness=%s); screen coordinates "
+            "and captured sizes may be wrong on scaled displays.",
+            awareness,
+        )
 
 
 def list_monitors() -> list[MonitorInfo]:
@@ -93,7 +111,14 @@ def list_windows() -> list[WindowInfo]:
 
 
 def capture_monitor(monitor_id: int | None) -> tuple[Image.Image, MonitorInfo]:
+    with _capture_lock:
+        return _capture_monitor(monitor_id)
+
+
+def _capture_monitor(monitor_id: int | None) -> tuple[Image.Image, MonitorInfo]:
     monitors = list_monitors()
+    if not monitors:
+        raise CaptureError("モニターが見つかりません。")
     if monitor_id is None:
         monitor = next((m for m in monitors if m.primary), monitors[0])
     else:
@@ -111,11 +136,17 @@ def capture_monitor(monitor_id: int | None) -> tuple[Image.Image, MonitorInfo]:
 
 
 def capture_window(hwnd: int) -> tuple[Image.Image, WindowInfo]:
-    if not win32gui.IsWindow(hwnd):
-        raise CaptureError(
-            f"window_id {hwnd} のウィンドウは存在しません。list_windows で確認してください。"
-        )
+    with _capture_lock:
+        return _capture_window(hwnd)
+
+
+def _capture_window(hwnd: int) -> tuple[Image.Image, WindowInfo]:
+    missing = CaptureError(
+        f"window_id {hwnd} のウィンドウは存在しません。list_windows で確認してください。"
+    )
     try:
+        if not win32gui.IsWindow(hwnd):
+            raise missing
         info = _window_info(hwnd, win32gui.GetForegroundWindow())
         if info.minimized:
             raise CaptureError(
@@ -124,6 +155,8 @@ def capture_window(hwnd: int) -> tuple[Image.Image, WindowInfo]:
         if info.width <= 0 or info.height <= 0:
             raise CaptureError(f"「{info.title}」はサイズが 0 のため撮影できません。")
         return _print_window(hwnd, info.width, info.height), info
+    except (TypeError, OverflowError) as error:
+        raise missing from error
     except (pywintypes.error, win32ui.error) as error:
         raise CaptureError(f"ウィンドウの撮影に失敗しました: {error}") from error
 
@@ -175,12 +208,16 @@ def _print_window(hwnd: int, width: int, height: int) -> Image.Image:
             bitmap = win32ui.CreateBitmap()
             bitmap.CreateCompatibleBitmap(window_dc, width, height)
             try:
-                memory_dc.SelectObject(bitmap)
-                if not _user32.PrintWindow(hwnd, memory_dc.GetSafeHdc(), PW_RENDERFULLCONTENT):
-                    raise CaptureError(
-                        f"PrintWindow が失敗しました（Win32 エラー {ctypes.get_last_error()}）。"
-                    )
-                bits = bitmap.GetBitmapBits(True)
+                previous = memory_dc.SelectObject(bitmap)
+                try:
+                    if not _user32.PrintWindow(hwnd, memory_dc.GetSafeHdc(), PW_RENDERFULLCONTENT):
+                        raise CaptureError(
+                            f"PrintWindow が失敗しました（Win32 エラー {ctypes.get_last_error()}）。"
+                        )
+                    bits = bitmap.GetBitmapBits(True)
+                finally:
+                    # A bitmap can only be deleted once it is no longer selected into a DC.
+                    memory_dc.SelectObject(previous)
             finally:
                 win32gui.DeleteObject(bitmap.GetHandle())
         finally:
@@ -188,4 +225,8 @@ def _print_window(hwnd: int, width: int, height: int) -> Image.Image:
             window_dc.DeleteDC()
     finally:
         win32gui.ReleaseDC(hwnd, window_dc_handle)
+    if len(bits) != width * height * 4:
+        raise CaptureError(
+            "ウィンドウのビットマップ形式に対応していません（32 ビットカラーではありません）。"
+        )
     return Image.frombuffer("RGB", (width, height), bits, "raw", "BGRX", 0, 1)
