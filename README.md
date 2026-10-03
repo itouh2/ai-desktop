@@ -20,8 +20,8 @@ uv run pytest
 ## Claude Code への登録
 
 ```powershell
-claude mcp add --scope user desktop -- uv run --no-sync --directory C:/Works/2026/ai-desktop ai-desktop
-claude mcp list   # desktop が ✓ Connected になっていれば OK
+claude mcp add --scope user ai-desktop -- uv run --no-sync --directory C:/Works/2026/ai-desktop ai-desktop
+claude mcp list   # ai-desktop が ✓ Connected になっていれば OK
 ```
 
 `--no-sync` を付けるのは、別の Claude Code セッションの MCP サーバーが動いていても起動できるようにするためです（付けないと、起動時の同期が使用中の `ai-desktop.exe` を書き換えられずに失敗します）。依存関係を変えたときは、すべてのセッションを閉じてから `uv sync` を実行してください。
