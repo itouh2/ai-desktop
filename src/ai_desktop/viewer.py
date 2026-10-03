@@ -8,20 +8,19 @@ import os
 import secrets
 import threading
 import time
-from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from ai_desktop.annotate import VIEWER_TITLE_PREFIX, content_security_policy, render_shell
-from ai_desktop.captures import CaptureStore, Target
+from ai_desktop.captures import CaptureStore
 from ai_desktop.imaging import CaptureError, image_to_screen
 
 _log = logging.getLogger(__name__)
 
 ACK_TIMEOUT_SECONDS = 1.5
 HEARTBEAT_SECONDS = 15.0
-SETTLE_SECONDS = 0.7
+SETTLE_SECONDS = 0.15  # after minimizing the browser, before the click arrives
 MAX_BODY_BYTES = 1024
 TOKEN_HEADER = "X-AI-Desktop-Token"
 
@@ -41,20 +40,18 @@ class Viewer:
     """Serves the current view to browser tabs over SSE and performs clicks sent back from them.
 
     control is the ai_desktop.control module in production; tests pass a fake with the same
-    functions (find_window, cursor_pos, minimize, bring_to_front, window_origin, click,
-    set_cursor, restore)."""
+    functions (find_window, cursor_pos, minimize, bring_to_front, window_origin, window_rect,
+    click, set_cursor, restore)."""
 
     def __init__(
         self,
         store: CaptureStore,
-        recapture: Callable[[Target], str],
         control: Any,
         settle_seconds: float = SETTLE_SECONDS,
         ack_timeout: float = ACK_TIMEOUT_SECONDS,
         heartbeat_seconds: float = HEARTBEAT_SECONDS,
     ) -> None:
         self._store = store
-        self._recapture = recapture
         self._control = control
         self._settle_seconds = settle_seconds
         self._ack_timeout = ack_timeout
@@ -128,8 +125,8 @@ class Viewer:
 
     # --- clicking --------------------------------------------------------------------------
 
-    def perform_click(self, capture_id: str, x: float, y: float, double: bool) -> str:
-        """Click the real screen where (x, y) is on the capture, then show a fresh capture."""
+    def perform_click(self, capture_id: str, x: float, y: float, double: bool) -> None:
+        """Click the real screen where (x, y) is on the capture. The page is left as it is."""
         if not self._operating.acquire(blocking=False):
             raise CaptureError("ほかの操作を実行中です。終わるまで待ってください。")
         try:
@@ -144,24 +141,23 @@ class Viewer:
                 )
             cursor = self._control.cursor_pos()
             try:
-                if browser is not None:
-                    self._control.minimize(browser)
                 origin = None
                 if target.kind == "window":
+                    # Bringing the target to the front also lifts it above the browser.
                     if not self._control.bring_to_front(target.id):
                         raise CaptureError("対象のウィンドウを前面に出せませんでした。もう一度クリックしてください。")
                     origin = self._control.window_origin(target.id)
                 screen_x, screen_y = image_to_screen(meta, x, y, origin)
+                if browser is not None and target.kind == "monitor":
+                    left, top, right, bottom = self._control.window_rect(browser)
+                    if left <= screen_x < right and top <= screen_y < bottom:
+                        self._control.minimize(browser)
+                        time.sleep(self._settle_seconds)
                 self._control.click(screen_x, screen_y, double)
-                time.sleep(self._settle_seconds)
-                new_id = self._recapture(target)
             finally:
                 self._control.set_cursor(*cursor)
                 if browser is not None:
                     self._control.restore(browser)
-            _, new_meta = self._store.get(new_id)
-            self.publish(new_id, "", new_meta["source"])
-            return new_id
         finally:
             self._operating.release()
 
@@ -258,7 +254,7 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
 
         def _click(self, body: dict) -> None:
             try:
-                new_id = viewer.perform_click(
+                viewer.perform_click(
                     str(body["captureId"]), float(body["x"]), float(body["y"]), bool(body.get("double", False))
                 )
             except CaptureError as error:
@@ -269,7 +265,7 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
                 _log.exception("click failed")
                 self._send_json(500, {"error": "操作中に予期しないエラーが起きました。"})
             else:
-                self._send_json(200, {"ok": True, "captureId": new_id})
+                self._send_json(200, {"ok": True})
 
         def _stream_events(self) -> None:
             self.send_response(200)

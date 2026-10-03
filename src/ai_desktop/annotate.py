@@ -93,7 +93,12 @@ async function operate(event, double) {
   try {
     const response = await post("/click", {captureId: view.captureId, x: x, y: y, double: double});
     const result = await response.json();
-    status(result.error || "", Boolean(result.error));
+    if (result.error) {
+      status(result.error, true);
+    } else {
+      status("クリックしました（ページは更新されません）", false);
+      setTimeout(() => status("", false), 1500);
+    }
   } catch (error) {
     status("操作できませんでした: " + error, true);
   } finally {

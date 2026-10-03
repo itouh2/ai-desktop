@@ -17,8 +17,11 @@ BROWSER = 777
 class FakeControl:
     """Records every control call in order instead of touching the real desktop."""
 
-    def __init__(self, browser=BROWSER, origin=(100, 200), fail_origin=False, front_ok=True):
+    def __init__(
+        self, browser=BROWSER, origin=(100, 200), fail_origin=False, front_ok=True, browser_rect=(0, 0, 1000, 1000)
+    ):
         self.calls = []
+        self.browser_rect = browser_rect
         self.front_ok = front_ok
         self.browser = browser
         self.origin = origin
@@ -44,6 +47,10 @@ class FakeControl:
         if self.fail_origin:
             raise CaptureError("操作対象のウィンドウが見つかりません。撮影し直してください。")
         return self.origin
+
+    def window_rect(self, hwnd):
+        self.calls.append(("window_rect", hwnd))
+        return self.browser_rect
 
     def click(self, x, y, double):
         self.calls.append(("click", x, y, double))
@@ -74,11 +81,7 @@ def control():
 
 @pytest.fixture
 def viewer(store, control):
-    def recapture(target):
-        meta = WINDOW_META if target.kind == "window" else MONITOR_META
-        return store.add(b"fresh-jpeg", meta, target)
-
-    viewer = Viewer(store, recapture, control, settle_seconds=0, ack_timeout=1.0, heartbeat_seconds=0.2)
+    viewer = Viewer(store, control, settle_seconds=0, ack_timeout=1.0, heartbeat_seconds=0.2)
     yield viewer
     viewer.close()
 
@@ -87,26 +90,32 @@ def viewer(store, control):
 
 
 def test_click_on_window_capture_follows_the_window(viewer, control):
-    new_id = viewer.perform_click("c2", 10, 20, False)
-    assert new_id == "c3"
+    assert viewer.perform_click("c2", 10, 20, False) is None
     assert control.calls == [
         ("find_window", "ai-desktop | "),
         ("cursor_pos",),
-        ("minimize", BROWSER),
         ("bring_to_front", 42),
         ("window_origin", 42),
         ("click", 110, 220, False),
         ("set_cursor", 5, 6),
         ("restore", BROWSER),
     ]
-    assert viewer.next_view(0, 0)["captureId"] == "c3"
-    assert viewer.next_view(0, 0)["html"] == ""
+    assert viewer.next_view(0, 0) is None  # nothing published
 
 
-def test_double_click_on_monitor_capture_uses_capture_origin(viewer, control):
+def test_monitor_click_under_the_browser_minimizes_it(viewer, control):
     viewer.perform_click("c1", 49, 98, True)
     assert ("click", 100, 200, True) in control.calls
+    assert control.calls.index(("minimize", BROWSER)) < control.calls.index(("click", 100, 200, True))
     assert not any(call[0] in ("bring_to_front", "window_origin") for call in control.calls)
+
+
+def test_monitor_click_beside_the_browser_does_not_minimize_it(viewer, control):
+    control.browser_rect = (3840, 0, 7680, 2160)
+    viewer.perform_click("c1", 49, 98, False)
+    assert not any(call[0] == "minimize" for call in control.calls)
+    assert ("click", 100, 200, False) in control.calls
+    assert control.calls[-1] == ("restore", BROWSER)
 
 
 def test_failed_click_still_restores_cursor_and_browser(viewer, control):
@@ -206,7 +215,7 @@ def test_click_requires_token_and_same_origin(viewer, control):
     assert post(viewer, "/click", body, origin="https://example.com")[0] == 403
     assert control.calls == []
     status, result = post(viewer, "/click", body)
-    assert (status, result) == (200, {"ok": True, "captureId": "c3"})
+    assert (status, result) == (200, {"ok": True})
     assert ("click", 110, 220, False) in control.calls
 
 

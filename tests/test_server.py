@@ -143,14 +143,6 @@ def test_captures_record_their_target():
     assert server.captures.target("c2") == Target("window", 42)
 
 
-def test_recapture_takes_the_same_target_again():
-    call("capture_window", {"title": "excel"})
-    new_id = server._recapture(Target("window", 42))
-    assert new_id == "c2"
-    assert server.captures.target(new_id) == Target("window", 42)
-    assert server.captures.get(new_id)[1]["source"] == "window:42 Book1 - Excel"
-
-
 class FakeViewer:
     """Stands in for ai_desktop.viewer.Viewer: records publishes instead of serving pages."""
 

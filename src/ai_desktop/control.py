@@ -98,6 +98,15 @@ def window_origin(hwnd: int) -> tuple[int, int]:
     return left, top
 
 
+def window_rect(hwnd: int) -> tuple[int, int, int, int]:
+    """Current (left, top, right, bottom) of the window, in physical pixels."""
+    try:
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    except (pywintypes.error, TypeError, OverflowError) as error:
+        raise CaptureError("ブラウザのウィンドウの位置を取得できませんでした。") from error
+    return left, top, right, bottom
+
+
 def bring_to_front(hwnd: int) -> bool:
     """Foreground the window, restoring it if minimized; True on success.
 

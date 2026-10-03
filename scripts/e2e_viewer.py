@@ -58,7 +58,7 @@ async def run(lines) -> None:
         clicked = await asyncio.to_thread(post_click, url, meta["captureId"], *center, False)
         print("click:", clicked, latest(lines, 1.0))
         assert clicked.get("ok"), clicked
-        doubled = await asyncio.to_thread(post_click, url, clicked["captureId"], *center, True)
+        doubled = await asyncio.to_thread(post_click, url, meta["captureId"], *center, True)
         state = latest(lines, 1.0)
         print("double:", doubled, state)
         assert doubled.get("ok"), doubled

@@ -61,18 +61,7 @@ def _capture_result(
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(meta, ensure_ascii=False)]
 
 
-def _recapture(target: Target) -> str:
-    """Capture the same monitor or window again; returns the new captureId."""
-    if target.kind == "monitor":
-        image, monitor = capture.capture_monitor(target.id)
-        source, origin = f"monitor:{monitor.id} {monitor.name}", (monitor.x, monitor.y)
-    else:
-        image, window = capture.capture_window(target.id)
-        source, origin = f"window:{window.id} {window.title}", (window.x, window.y)
-    return _store_capture(image, source, *origin, target)[1]["captureId"]
-
-
-viewer = Viewer(captures, _recapture, control)
+viewer = Viewer(captures, control)
 
 
 @mcp.tool(structured_output=False)
@@ -128,7 +117,8 @@ def show_annotated(capture_id: str, html: str, title: str | None = None) -> str:
     """Show the user one of your captures with your annotations drawn on top, in their
     default browser. Use it when pointing at places on screen makes your advice clearer.
     An open viewer tab is reused. The user can click or double-click on the page to click
-    the real screen at that spot; the page then shows a fresh capture without annotations.
+    the real screen at that spot; the page itself is not refreshed (annotations stay),
+    so capture again to see the result.
 
     capture_id: the captureId from a capture's metadata (the latest 10 are kept).
     html: elements positioned absolutely with style left/top in that capture's image
