@@ -291,9 +291,12 @@ def test_publish_reaches_an_open_tab_that_acknowledges(viewer):
         connection.request("GET", f"/events?t={viewer.token}")
         response = connection.getresponse()
         connected.set()
+        event = None
         while len(received) < 1:
             line = response.fp.readline().decode("utf-8")
-            if line.startswith("data: "):
+            if line.startswith("event: "):
+                event = line[len("event: "):].strip()
+            elif line.startswith("data: ") and event == "view":
                 view = json.loads(line[len("data: "):])
                 received.append(view)
                 post(viewer, "/ack", {"version": view["version"]})
@@ -347,3 +350,111 @@ def test_ack_with_a_malformed_body_is_a_bad_request(viewer):
     viewer.ensure_started()
     assert post(viewer, "/ack", [1])[0] == 400
     assert post(viewer, "/ack", {"version": "x"})[0] == 400
+
+
+# --- page buttons ----------------------------------------------------------------------------
+
+
+def wait_in_background(viewer, timeout=5.0):
+    """Start wait_for_button on a thread; returns (thread, results list)."""
+    results = []
+    thread = threading.Thread(target=lambda: results.append(viewer.wait_for_button(timeout)), daemon=True)
+    thread.start()
+    for _ in range(100):  # until the viewer is waiting
+        if viewer._state == "waiting":
+            break
+        time.sleep(0.01)
+    return thread, results
+
+
+def test_publish_carries_explanation_and_buttons(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "説明" * 2500, ["できた", "分からない"])
+    view = viewer.next_view(0, 0)
+    assert view["explanation"] == ("説明" * 2500)[:4000]
+    assert view["buttons"] == ["できた", "分からない"]
+
+
+def test_press_without_a_waiter_is_rejected(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.press("できた")
+    assert viewer._state == "idle"
+
+
+def test_wait_requires_a_page_with_buttons(viewer):
+    with pytest.raises(CaptureError, match="表示中のページがありません"):
+        viewer.wait_for_button(1)
+    viewer.publish("c2", "<div></div>", "Excel")
+    with pytest.raises(CaptureError, match="ボタンがありません"):
+        viewer.wait_for_button(1)
+
+
+def test_pressing_a_shown_button_wakes_the_waiter(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた", "分からない"])
+    thread, results = wait_in_background(viewer)
+    with pytest.raises(CaptureError, match="使えません"):
+        viewer.press("やめる")
+    viewer.press("分からない")
+    thread.join(5)
+    assert results == ["分からない"]
+    assert viewer._state == "thinking"
+
+
+def test_wait_times_out_back_to_idle(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert viewer.wait_for_button(0.05) is None
+    assert viewer._state == "idle"
+
+
+def test_a_newer_wait_cancels_the_older_one(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    first, first_results = wait_in_background(viewer)
+    second, second_results = wait_in_background(viewer)
+    first.join(5)
+    assert first_results == [None]
+    viewer.press("できた")
+    second.join(5)
+    assert second_results == ["できた"]
+
+
+def test_failed_recapture_sets_error_until_the_next_page(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+
+    def failing(target):
+        assert target == Target("window", 42)
+        raise CaptureError("ウィンドウが閉じられました")
+
+    with pytest.raises(CaptureError):
+        viewer.recapture_current(failing)
+    assert viewer._state == "error"
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert viewer._state == "idle"
+
+
+def test_recapture_current_uses_the_shown_target(viewer):
+    viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+    assert viewer.recapture_current(lambda target: target) == Target("monitor", 1)
+
+
+def test_press_endpoint_checks_auth_and_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert post(viewer, "/press", {"button": "できた"}, token="wrong")[0] == 403
+    assert post(viewer, "/press", {"button": "できた"}, origin="https://example.com")[0] == 403
+    status, result = post(viewer, "/press", {"button": "できた"})
+    assert status == 200 and "待ち受けていません" in result["error"]
+    assert post(viewer, "/press", {"button": 1})[0] == 400
+    thread, results = wait_in_background(viewer)
+    assert post(viewer, "/press", {"button": "できた"}) == (200, {"ok": True})
+    thread.join(5)
+    assert results == ["できた"]
+
+
+def test_events_send_the_state_right_after_connecting(viewer):
+    viewer.ensure_started()
+    connection = http.client.HTTPConnection("127.0.0.1", int(viewer.origin.rsplit(":", 1)[1]), timeout=5)
+    connection.request("GET", f"/events?t={viewer.token}")
+    response = connection.getresponse()
+    lines = [response.fp.readline().decode("utf-8").strip() for _ in range(2)]
+    connection.close()
+    assert lines[0] == "event: state"
+    assert json.loads(lines[1][len("data: "):])["state"] == "idle"

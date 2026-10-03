@@ -9,11 +9,12 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from ai_desktop.annotate import VIEWER_TITLE_PREFIX, content_security_policy, render_shell
-from ai_desktop.captures import CaptureStore
+from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, image_to_screen
 
 _log = logging.getLogger(__name__)
@@ -24,6 +25,9 @@ SETTLE_SECONDS = 0.15  # after minimizing the browser, before the click arrives
 AFTER_CLICK_SECONDS = 0.3  # games handle a click on a later frame; keep focus and cursor until then
 MAX_BODY_BYTES = 1024
 TOKEN_HEADER = "X-AI-Desktop-Token"
+MAX_EXPLANATION_CHARS = 4000
+NOT_WAITING_MESSAGE = "Claude が待ち受けていません。チャットで、ボタンで進めたいと頼んでください。"
+UNKNOWN_BUTTON_MESSAGE = "そのボタンは今は使えません。"
 
 
 def _token_matches(candidate: str, token: str) -> bool:
@@ -67,6 +71,10 @@ class Viewer:
         self._acked = 0
         self._clients = 0
         self._operating = threading.Lock()
+        self._state = "idle"
+        self._state_version = 1  # new tabs receive the current state right away
+        self._wait_generation = 0
+        self._pressed: str | None = None
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -98,7 +106,9 @@ class Viewer:
 
     # --- showing ---------------------------------------------------------------------------
 
-    def publish(self, capture_id: str, html: str, title: str) -> bool:
+    def publish(
+        self, capture_id: str, html: str, title: str, explanation: str = "", buttons: list[str] | None = None
+    ) -> bool:
         """Make this the current view; True when an open tab confirmed it within the timeout."""
         _, meta = self._store.get(capture_id)
         self.ensure_started()
@@ -112,7 +122,11 @@ class Viewer:
                 "height": meta["imageHeight"],
                 "html": html,
                 "title": title,
+                "explanation": explanation[:MAX_EXPLANATION_CHARS],
+                "buttons": list(buttons or []),
             }
+            if self._state in ("thinking", "error"):
+                self._set_state("idle")
             self._changed.notify_all()
             if self._clients == 0:
                 return False
@@ -125,6 +139,62 @@ class Viewer:
 
     def open_browser(self) -> None:
         os.startfile(self.url)
+
+    # --- page buttons ----------------------------------------------------------------------
+
+    def wait_for_button(self, timeout: float) -> str | None:
+        """Block until a page button is pressed; its label, or None on timeout.
+
+        A newer wait cancels an older one, which then returns None, so a wait left over
+        from an interrupted turn cannot block the next one."""
+        with self._changed:
+            if self._view is None:
+                raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
+            if not self._view["buttons"]:
+                raise CaptureError("表示中のページにボタンがありません。show_annotated に buttons を付けてください。")
+            self._wait_generation += 1
+            generation = self._wait_generation
+            self._pressed = None
+            self._set_state("waiting")
+            done = lambda: self._pressed is not None or self._wait_generation != generation  # noqa: E731
+            self._changed.wait_for(done, timeout=timeout)
+            if self._wait_generation != generation:
+                return None
+            if self._pressed is not None:
+                label, self._pressed = self._pressed, None
+                return label
+            self._set_state("idle")
+            return None
+
+    def press(self, label: str) -> None:
+        """A page button was pressed; wakes the waiting tool call."""
+        with self._changed:
+            if self._state != "waiting":
+                raise CaptureError(NOT_WAITING_MESSAGE)
+            if self._view is None or label not in self._view["buttons"]:
+                raise CaptureError(UNKNOWN_BUTTON_MESSAGE)
+            self._pressed = label
+            self._set_state("thinking")
+
+    def recapture_current(self, recapture: Callable[[Target], Any]) -> Any:
+        """Capture the target of the view on screen again (waits for a click in progress)."""
+        with self._operating:
+            with self._changed:
+                if self._view is None:
+                    raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
+                capture_id = self._view["captureId"]
+            try:
+                return recapture(self._store.target(capture_id))
+            except CaptureError:
+                with self._changed:
+                    self._set_state("error")
+                raise
+
+    def _set_state(self, state: str) -> None:
+        """Caller holds self._changed."""
+        self._state = state
+        self._state_version += 1
+        self._changed.notify_all()
 
     # --- clicking --------------------------------------------------------------------------
 
@@ -185,6 +255,22 @@ class Viewer:
             if version > self._acked:
                 self._acked = version
                 self._changed.notify_all()
+
+    def next_update(self, seen_view: int, seen_state: int, timeout: float) -> tuple[dict | None, dict | None]:
+        """(view, state) entries newer than the versions seen, or (None, None) after timeout."""
+        with self._changed:
+
+            def changed() -> bool:
+                newer_view = self._view is not None and self._view["version"] > seen_view
+                return newer_view or self._state_version > seen_state
+
+            if not self._changed.wait_for(changed, timeout=timeout):
+                return None, None
+            view = dict(self._view) if self._view is not None and self._view["version"] > seen_view else None
+            state = (
+                {"version": self._state_version, "state": self._state} if self._state_version > seen_state else None
+            )
+            return view, state
 
     def next_view(self, seen_version: int, timeout: float) -> dict | None:
         """The current view once it is newer than seen_version, or None after timeout."""
@@ -255,6 +341,17 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
                 self._send_json(200, {"ok": True})
             elif path == "/click":
                 self._click(body)
+            elif path == "/press":
+                label = body.get("button")
+                if not isinstance(label, str):
+                    self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                    return
+                try:
+                    viewer.press(label)
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
             else:
                 self._send_json(404, {"error": "not found"})
 
@@ -280,15 +377,19 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             viewer.register_client()
             try:
-                seen = 0
+                seen_view = seen_state = 0
                 while True:
-                    view = viewer.next_view(seen, viewer.heartbeat_seconds)
-                    if view is None:
+                    view, state = viewer.next_update(seen_view, seen_state, viewer.heartbeat_seconds)
+                    if view is None and state is None:
                         self.wfile.write(b": ping\n\n")
-                    else:
-                        seen = view["version"]
+                    if view is not None:
+                        seen_view = view["version"]
                         data = json.dumps(view, ensure_ascii=False)
                         self.wfile.write(f"event: view\ndata: {data}\n\n".encode("utf-8"))
+                    if state is not None:
+                        seen_state = state["version"]
+                        data = json.dumps(state, ensure_ascii=False)
+                        self.wfile.write(f"event: state\ndata: {data}\n\n".encode("utf-8"))
                     self.wfile.flush()
             except OSError:
                 pass  # the tab was closed
