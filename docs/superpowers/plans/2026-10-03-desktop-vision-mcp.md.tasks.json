@@ -1,0 +1,48 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-03-desktop-vision-mcp.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: プロジェクトの雛形と画像処理",
+      "status": "pending",
+      "description": "**Goal:** uv プロジェクトを作り、縮小・JPEG 化・座標メタデータ・座標変換の純粋関数をテスト付きで実装する。\n\n**Files:**\n- Create: `pyproject.toml`\n- Create: `.python-version`\n- Create: `.gitignore`\n- Create: `src/ai_desktop/__init__.py`\n- Create: `src/ai_desktop/imaging.py`\n- Test: `tests/test_imaging.py`\n\n**Acceptance Criteria:**\n- [ ] `uv sync` が成功し、`.venv` に mcp 2.x・mss・pywin32・Pillow・pytest が入る\n- [ ] `fit_size` が、横長・縦長・ちょうど上限・上限未満・極端な比率で期待どおりのサイズと縮小率を返す\n- [ ] `shrink` が大きい画像を縮小し、小さい画像は同じオブジェクトのまま返す\n- [ ] `encode_jpeg` が RGBA 入力でも `FF D8` で始まる JPEG を返す\n- [ ] `build_meta` のキーと値が仕様 §5.3 と一致する\n- [ ] `image_to_screen` が origin と scale を正しく適用する\n- [ ] `uv run pytest tests/test_imaging.py -v` が全件 PASS\n\n**Verify:** `uv run pytest tests/test_imaging.py -v` → `10 passed`\n\n```json:metadata\n{\"files\": [\"pyproject.toml\", \".python-version\", \".gitignore\", \"src/ai_desktop/__init__.py\", \"src/ai_desktop/imaging.py\", \"tests/test_imaging.py\"], \"verifyCommand\": \"uv run pytest tests/test_imaging.py -v\", \"acceptanceCriteria\": [\"`uv sync` が成功し、`.venv` に mcp 2.x・mss・pywin32・Pillow・pytest が入る\", \"`fit_size` が、横長・縦長・ちょうど上限・上限未満・極端な比率で期待どおりのサイズと縮小率を返す\", \"`shrink` が大きい画像を縮小し、小さい画像は同じオブジェクトのまま返す\", \"`encode_jpeg` が RGBA 入力でも `FF D8` で始まる JPEG を返す\", \"`build_meta` のキーと値が仕様 §5.3 と一致する\", \"`image_to_screen` が origin と scale を正しく適用する\", \"`uv run pytest tests/test_imaging.py -v` が全件 PASS\"], \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: データ型とウィンドウ選択",
+      "status": "pending",
+      "description": "**Goal:** `CaptureError`・`MonitorInfo`・`WindowInfo` を定義し、タイトルの部分一致でウィンドウを1つに絞る `select_window` をテスト付きで実装する。\n\n**Files:**\n- Modify: `src/ai_desktop/imaging.py`（データ型と `select_window` を追加）\n- Test: `tests/test_matching.py`\n\n**Acceptance Criteria:**\n- [ ] 該当 0 件で、`list_windows` への案内を含む `CaptureError` を送出する\n- [ ] 該当 1 件で、そのウィンドウを返す\n- [ ] 複数件のうち完全一致（大文字小文字は区別しない）が1つなら、それを返す\n- [ ] 複数件で完全一致がなければ、各候補の `id=` とタイトル、および `window_id` への案内を含む `CaptureError` を送出する\n- [ ] 候補が 20 件を超える場合、21 件目以降は「ほか N 件」と要約する\n- [ ] 大文字小文字の違いを無視して一致させる\n- [ ] `uv run pytest -v` が全件 PASS（Task 1 の分を含む）\n\n**Verify:** `uv run pytest -v` → `16 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/imaging.py\", \"tests/test_matching.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"該当 0 件で、`list_windows` への案内を含む `CaptureError` を送出する\", \"該当 1 件で、そのウィンドウを返す\", \"複数件のうち完全一致（大文字小文字は区別しない）が1つなら、それを返す\", \"複数件で完全一致がなければ、各候補の `id=` とタイトル、および `window_id` への案内を含む `CaptureError` を送出する\", \"候補が 20 件を超える場合、21 件目以降は「ほか N 件」と要約する\", \"大文字小文字の違いを無視して一致させる\", \"`uv run pytest -v` が全件 PASS（Task 1 の分を含む）\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: Win32 の撮影モジュールとスモークスクリプト",
+      "status": "pending",
+      "description": "**Goal:** DPI 設定・モニター／ウィンドウの列挙・mss によるモニター撮影・PrintWindow によるウィンドウ撮影を実装し、実機スモークスクリプトで動作を確かめる。\n\n**Files:**\n- Create: `src/ai_desktop/capture.py`\n- Create: `scripts/smoke.py`\n\n**Acceptance Criteria:**\n- [ ] `uv run python scripts/smoke.py` が例外なく終了する\n- [ ] 出力の monitor 行の数が接続中のモニター数と一致し、ちょうど1つが `primary=True` である\n- [ ] 出力の `captured monitor` のサイズが、プライマリモニターの `width × height`（物理ピクセル）と一致する\n- [ ] `smoke-out/monitor.png` と `smoke-out/window.png` が作られ、Read で開くと黒一色ではなく画面の内容が写っている\n- [ ] `uv run pytest -v` が引き続き全件 PASS\n\n**Verify:** `PYTHONIOENCODING=utf-8 uv run python scripts/smoke.py` → `monitor:` 行・`windows: N visible`・`captured monitor ...`・`captured window ...` が表示される。その後 `smoke-out/*.png` を Read で目視確認する。\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/capture.py\", \"scripts/smoke.py\"], \"verifyCommand\": \"PYTHONIOENCODING=utf-8 uv run python scripts/smoke.py && uv run pytest -v\", \"acceptanceCriteria\": [\"`uv run python scripts/smoke.py` が例外なく終了する\", \"出力の monitor 行の数が接続中のモニター数と一致し、ちょうど1つが `primary=True` である\", \"出力の `captured monitor` のサイズが、プライマリモニターの `width × height`（物理ピクセル）と一致する\", \"`smoke-out/monitor.png` と `smoke-out/window.png` が作られ、Read で開くと黒一色ではなく画面の内容が写っている\", \"`uv run pytest -v` が引き続き全件 PASS\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: MCP サーバーとツール4つ",
+      "status": "pending",
+      "description": "**Goal:** `MCPServer` でツール4つ（`list_monitors` / `list_windows` / `capture_monitor` / `capture_window`）を公開し、`CaptureError` をメッセージ付きの `ToolError` に変換する。インメモリの MCP クライアントでテストする。\n\n**Files:**\n- Create: `src/ai_desktop/server.py`\n- Test: `tests/test_server.py`\n\n**Acceptance Criteria:**\n- [ ] `list_tools` が、ちょうど `list_monitors`・`list_windows`・`capture_monitor`・`capture_window` の4つを返す\n- [ ] `list_monitors` が `MonitorInfo` のフィールドを持つ JSON 配列を返す\n- [ ] `capture_monitor` が `image/jpeg` の画像と、仕様 §5.3 のメタデータ JSON の2つを返す（3200×1600 → 1568×784、scale 0.49）\n- [ ] `capture_window(title=\"excel\")` で、`source` が `window:42 Book1 - Excel`、`originX` が -100 のメタデータを返す\n- [ ] `capture_window` に引数なし、または両方を渡すと、「どちらか一方」を含む `isError` 結果になる\n- [ ] `CaptureError` の日本語メッセージが、`isError` 結果のテキストにそのまま含まれる\n- [ ] `uv run pytest -v` が全件 PASS\n\n**Verify:** `uv run pytest -v` → `24 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/server.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run pytest -v\", \"acceptanceCriteria\": [\"`list_tools` が、ちょうど `list_monitors`・`list_windows`・`capture_monitor`・`capture_window` の4つを返す\", \"`list_monitors` が `MonitorInfo` のフィールドを持つ JSON 配列を返す\", \"`capture_monitor` が `image/jpeg` の画像と、仕様 §5.3 のメタデータ JSON の2つを返す（3200×1600 → 1568×784、scale 0.49）\", \"`capture_window(title=\\\"excel\\\")` で、`source` が `window:42 Book1 - Excel`、`originX` が -100 のメタデータを返す\", \"`capture_window` に引数なし、または両方を渡すと、「どちらか一方」を含む `isError` 結果になる\", \"`CaptureError` の日本語メッセージが、`isError` 結果のテキストにそのまま含まれる\", \"`uv run pytest -v` が全件 PASS\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: README・Claude Code への登録・受け入れテスト",
+      "status": "pending",
+      "description": "**Goal:** README を書き、Claude Code に MCP サーバーを登録して、仕様 §8 の受け入れテストを実機の Claude Code で確認する。\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create: `README.md`\n\n**Acceptance Criteria:**\n- [ ] `README.md` に、必要環境・`uv sync`・`uv run pytest`・`claude mcp add` での登録・使い方の例・ツール一覧・既知の制限が書かれている\n- [ ] `claude mcp list` の出力に `desktop` が含まれ、`Connected` と表示される\n- [ ] 受け入れ1: `claude -p` に「今の画面を見て」と頼むと `capture_monitor` が呼ばれ、実際の画面内容に触れた回答が返る\n- [ ] 受け入れ2・3: 起動中で、他のウィンドウの裏にある Chrome か VS Code のウィンドウを `title` で撮らせると、そのウィンドウの内容に触れた回答が返る（黒画像ではない）\n- [ ] 受け入れ4: 表示スケールが 100% 以外のモニターで、`capture_monitor` のメタデータの `originalWidth × originalHeight` が `list_monitors` のサイズと一致する\n- [ ] 受け入れ5（モニターが2台以上ある場合）: `monitor_id=2` で2番目のモニターが撮れる\n- [ ] 受け入れ6: 複数のウィンドウに一致するタイトル（例: `Chrome`）を指定すると、Claude が候補リストを受けて `window_id` で撮り直す\n- [ ] ユーザーが VS Code の Claude Code パネルから「今の画面を見てアドバイスして」を実行し、問題ないと確認する\n\n**Verify:** `claude mcp list` → `desktop: ... - ✓ Connected`。続いて Step 4 の `claude -p` コマンドを実行し、出力を記録する。\n\n```json:metadata\n{\"files\": [\"README.md\"], \"verifyCommand\": \"claude mcp list\", \"acceptanceCriteria\": [\"`README.md` に、必要環境・`uv sync`・`uv run pytest`・`claude mcp add` での登録・使い方の例・ツール一覧・既知の制限が書かれている\", \"`claude mcp list` の出力に `desktop` が含まれ、`Connected` と表示される\", \"受け入れ1: `claude -p` に「今の画面を見て」と頼むと `capture_monitor` が呼ばれ、実際の画面内容に触れた回答が返る\", \"受け入れ2・3: 起動中で、他のウィンドウの裏にある Chrome か VS Code のウィンドウを `title` で撮らせると、そのウィンドウの内容に触れた回答が返る（黒画像ではない）\", \"受け入れ4: 表示スケールが 100% 以外のモニターで、`capture_monitor` のメタデータの `originalWidth × originalHeight` が `list_monitors` のサイズと一致する\", \"受け入れ5（モニターが2台以上ある場合）: `monitor_id=2` で2番目のモニターが撮れる\", \"受け入れ6: 複数のウィンドウに一致するタイトル（例: `Chrome`）を指定すると、Claude が候補リストを受けて `window_id` で撮り直す\", \"ユーザーが VS Code の Claude Code パネルから「今の画面を見てアドバイスして」を実行し、問題ないと確認する\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"], \"requiresUserSpecification\": false}\n```",
+      "blockedBy": [
+        3
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-03T00:00:00+09:00"
+}

@@ -46,7 +46,7 @@ VS Code の Claude Code ──(stdio / MCP)──▶ ai-desktop MCP サーバー
 |---|---|
 | 言語 | Python 3.12（`requires-python >= 3.11`） |
 | パッケージ管理 | uv |
-| MCP | 公式 Python SDK `mcp`（`FastMCP`、stdio トランスポート） |
+| MCP | 公式 Python SDK `mcp` 2.x（`mcp.server.mcpserver.MCPServer`、stdio トランスポート）。1.x の `FastMCP` は 2.x で `MCPServer` に改名された |
 | 撮影 | `mss`（モニター）、`pywin32` と `ctypes`（ウィンドウ） |
 | 画像 | `Pillow` |
 | テスト | `pytest` |
@@ -69,18 +69,22 @@ ai-desktop/
 ├─ README.md                  # セットアップと登録手順
 ├─ src/ai_desktop/
 │  ├─ __init__.py
-│  ├─ server.py               # FastMCP の生成、ツール4つの定義、main()
+│  ├─ server.py               # MCPServer の生成、ツール4つの定義、main()
 │  ├─ capture.py              # Win32 依存: DPI 設定、モニター・ウィンドウの列挙、撮影
 │  └─ imaging.py              # Windows 非依存の純粋処理: 縮小計算、JPEG 化、メタデータ、ウィンドウ選択
+├─ scripts/
+│  └─ smoke.py                # 実機での撮影確認用スクリプト（手動実行）
 └─ tests/
    ├─ test_imaging.py
-   └─ test_matching.py
+   ├─ test_matching.py
+   └─ test_server.py          # capture を差し替え、MCP クライアント経由でツールを検証
 ```
 
 ### 各ユニットの責務
 
 - **`imaging.py`**: OS に依存しない純粋な関数だけを置く。どの OS でもテストできる。
   - `fit_size(width, height, max_edge=1568) -> (new_width, new_height, scale)`
+  - `shrink(image, max_edge=1568) -> (image, scale)`: `fit_size` に従って縮小した画像と縮小率を返す
   - `encode_jpeg(image, quality=85) -> bytes`
   - `build_meta(source, origin_x, origin_y, original_size, image_size, scale) -> dict`
   - `image_to_screen(meta, x, y) -> (screen_x, screen_y)`: メタデータの変換式を表す関数。テストで仕様を固定するために用意し、将来の操作ツールでも使う
@@ -91,14 +95,14 @@ ai-desktop/
   - `list_windows() -> list[WindowInfo]`
   - `capture_monitor(monitor_id: int | None) -> (PIL.Image, MonitorInfo)`
   - `capture_window(hwnd: int) -> (PIL.Image, WindowInfo)`
-- **`server.py`**: 入力の検証、`capture` と `imaging` の呼び出し、MCP の戻り値の組み立てだけを行う。
+- **`server.py`**: 入力の検証、`capture` と `imaging` の呼び出し、MCP の戻り値の組み立て、`CaptureError` から `ToolError` への変換だけを行う。
 - **`CaptureError`**: ユーザー向けのメッセージを持つ例外。`imaging.py` に定義し、`capture.py` からも使う。
 
 `MonitorInfo` / `WindowInfo` は dataclass とし、`imaging.py` に置く（`select_window` のテストで Win32 なしに作れるようにするため）。
 
 ## 5. ツール仕様
 
-ツールのエラーは例外として送出する。FastMCP がこれを `isError` 付きのツール結果に変換するので、Claude はメッセージを読んで次の手を判断できる。
+ツールのエラーは `mcp.server.mcpserver.exceptions.ToolError` として送出する。MCPServer はこれを、メッセージ付きの `isError` ツール結果に変換するので、Claude はメッセージを読んで次の手を判断できる。それ以外の例外ではメッセージが隠され「Error executing tool ...」だけになる（2026-10-03 に mcp 2.3.0 で確認）。そのため、`server.py` で `CaptureError` を必ず `ToolError` に変換する。
 
 ### 5.1 `list_monitors`
 
@@ -227,6 +231,15 @@ stdio サーバーなので、標準出力には MCP のメッセージ以外を
   - 複数件のうち完全一致が1つ → そのウィンドウ
   - 複数件で完全一致なし → 候補を含む `CaptureError`
   - 大文字小文字の違いを無視すること
+- `test_server.py`（`capture` の関数を偽物に差し替え、インメモリの MCP クライアントで呼び出す）
+  - ツールが4つ公開されていること
+  - 撮影ツールが JPEG 画像とメタデータの2つを返すこと
+  - `capture_window` の引数検証（両方指定・両方未指定でエラー）
+  - `CaptureError` がメッセージ付きのツールエラーとして返ること
+
+### 実機スモークテスト
+
+`uv run python scripts/smoke.py` で、モニター一覧・ウィンドウ一覧・プライマリモニターと手前のウィンドウの撮影が動くことを確認する。
 
 ### 手動の受け入れテスト（Claude Code に登録して確認）
 
