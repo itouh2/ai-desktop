@@ -67,6 +67,18 @@ def encode_jpeg(image: Image.Image, quality: int = JPEG_QUALITY) -> bytes:
     return buffer.getvalue()
 
 
+def restore_dpi_scaling(image: Image.Image, window_dpi: int, monitor_dpi: int) -> Image.Image:
+    """Undo DPI virtualization in a PrintWindow image of a DPI-unaware window.
+
+    Such a window renders at window_dpi into the top-left of a bitmap sized for monitor_dpi,
+    leaving the rest black; crop that part and scale it back up to the full size."""
+    if window_dpi <= 0 or window_dpi >= monitor_dpi:
+        return image
+    ratio = window_dpi / monitor_dpi
+    content = image.crop((0, 0, max(1, round(image.width * ratio)), max(1, round(image.height * ratio))))
+    return content.resize(image.size, Image.LANCZOS)
+
+
 def build_meta(
     source: str,
     origin_x: int,

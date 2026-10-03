@@ -15,7 +15,7 @@ import win32ui
 from mss.exception import ScreenShotError
 from PIL import Image
 
-from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
+from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo, restore_dpi_scaling
 
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 PROCESS_PER_MONITOR_DPI_AWARE = 2
@@ -55,6 +55,12 @@ _dwmapi.DwmGetWindowAttribute.argtypes = [
     wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
 ]
 _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+_user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+_user32.GetDpiForWindow.restype = wintypes.UINT
+_user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+_user32.MonitorFromWindow.restype = wintypes.HMONITOR
+MONITOR_DEFAULTTONEAREST = 2
+MDT_EFFECTIVE_DPI = 0
 
 
 def enable_dpi_awareness() -> None:
@@ -154,11 +160,21 @@ def _capture_window(hwnd: int) -> tuple[Image.Image, WindowInfo]:
             )
         if info.width <= 0 or info.height <= 0:
             raise CaptureError(f"「{info.title}」はサイズが 0 のため撮影できません。")
-        return _print_window(hwnd, info.width, info.height), info
+        image = _print_window(hwnd, info.width, info.height)
+        return restore_dpi_scaling(image, _user32.GetDpiForWindow(hwnd), _monitor_dpi(hwnd)), info
     except (TypeError, OverflowError) as error:
         raise missing from error
     except (pywintypes.error, win32ui.error) as error:
         raise CaptureError(f"ウィンドウの撮影に失敗しました: {error}") from error
+
+
+def _monitor_dpi(hwnd: int) -> int:
+    """Effective DPI of the monitor showing the window; 0 if it cannot be read."""
+    monitor = _user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+    dpi_x, dpi_y = wintypes.UINT(), wintypes.UINT()
+    if ctypes.WinDLL("shcore").GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, ctypes.byref(dpi_x), ctypes.byref(dpi_y)):
+        return 0
+    return dpi_x.value
 
 
 def _window_info(hwnd: int, foreground: int) -> WindowInfo:

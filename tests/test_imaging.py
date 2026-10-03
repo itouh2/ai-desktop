@@ -1,6 +1,12 @@
 from PIL import Image
 
-from ai_desktop.imaging import build_meta, encode_jpeg, fit_size, image_to_screen, shrink
+from ai_desktop.imaging import (
+    build_meta,
+    encode_jpeg,
+    fit_size,
+    image_to_screen,
+    restore_dpi_scaling,
+    shrink,)
 
 
 def test_fit_size_shrinks_landscape_to_max_edge():
@@ -72,3 +78,17 @@ def test_image_to_screen_can_use_a_newer_origin():
     meta = build_meta("window:42 Excel", -100, 50, (1600, 900), (800, 450), 0.5)
     assert image_to_screen(meta, 10, 20) == (-80, 90)
     assert image_to_screen(meta, 10, 20, origin=(300, 400)) == (320, 440)
+
+
+def test_restore_dpi_scaling_stretches_the_rendered_part():
+    image = Image.new("RGB", (300, 150), "black")
+    image.paste(Image.new("RGB", (200, 100), "red"), (0, 0))  # rendered at 96 dpi on a 144 dpi monitor
+    restored = restore_dpi_scaling(image, 96, 144)
+    assert restored.size == (300, 150)
+    assert restored.getpixel((290, 140)) == (255, 0, 0)
+
+
+def test_restore_dpi_scaling_leaves_dpi_aware_windows_alone():
+    image = Image.new("RGB", (300, 150))
+    assert restore_dpi_scaling(image, 144, 144) is image
+    assert restore_dpi_scaling(image, 0, 144) is image
