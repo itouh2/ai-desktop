@@ -1,7 +1,7 @@
 # ai-desktop: 注釈ページの「つぎやること」ボタン 設計書
 
 - 日付: 2026-10-03
-- 状態: 設計案（ユーザー確認済みの方針。実装は別の担当者が行う）
+- 状態: 設計承認済み・実装前（2026-10-03 に待ち時間などを修正して確定）
 - 前提: [注釈付きスクショ表示](2026-10-03-annotated-view-design.md)、[ビューアーのクリック連動とタブの再利用](2026-10-03-viewer-click-design.md)
 
 ## 1. 目的
@@ -33,14 +33,14 @@
 | 撮り直しは誰がするか | MCP サーバー。押された時点で、表示中の画像と同じ対象（ウィンドウまたはモニター）を撮り直し、その画像をツールの結果として返す。Claude が別の画面を撮る取り違えを防ぐ |
 | 説明文の表示先 | ページにも出す（チャットにも従来どおり書く）。ブラウザとアプリの画面だけで完結させる（ユーザー選択） |
 | 説明文の扱い | プレーンテキスト。`textContent` で入れ、HTML として解釈しない |
-| 待ち時間の区切り | 1 回の待ちは既定 300 秒。時間切れなら「まだ押されていない」を返し、Claude が呼び直す。Claude Code の MCP ツール待ち時間の上限で途切れないようにするため |
+| 待ち時間の区切り | 1 回の待ちは既定 90 秒（上限 110 秒）。時間切れなら「まだ押されていない」を返し、Claude が呼び直す。Claude Code は会話中に 2 分を超えた MCP ツール呼び出しを自動でバックグラウンドに回す（`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`、既定 120000）ため、その前に必ず戻す。ツールの待ち時間の上限（`MCP_TOOL_TIMEOUT`、既定で約 28 時間）には当たらない |
 
 ## 4. 構成
 
 ```
 （ユーザー）「ボタンで案内して」
   └─ Claude: capture_* → show_annotated(capture_id, html, title, explanation)
-        └─ Claude: wait_for_next_step(timeout_seconds=300)   ← ここで待つ
+        └─ Claude: wait_for_next_step(timeout_seconds=90)   ← ここで待つ
               ├─ ページのボタンが押された
               │    └─ ビューアー: 表示中の対象を撮り直す → 画像と captureId を返す
               │          └─ Claude: 画像を見て show_annotated(..., explanation) → 再び wait_for_next_step
@@ -49,15 +49,16 @@
 
 ## 5. 部品ごとの仕様
 
-### 5.1 `wait_for_next_step(timeout_seconds: int = 300)`（新しいツール、`server.py`）
+### 5.1 `wait_for_next_step(timeout_seconds: int = 90)`（新しいツール、`server.py`）
 
 - ボタンが押されるまで待つ。待っている間、ビューアーの状態は「待ち受け中」になる。
-- 押されたら、表示中の `captureId` の撮影対象（`CaptureStore.target`）を撮り直して保存し、`capture_window` / `capture_monitor` と同じ形式（JPEG ＋ メタデータ JSON、新しい `captureId` を含む）で返す。
+- 押されたら、表示中の `captureId` の撮影対象（`CaptureStore.target`）を撮り直して保存し（撮り直し関数 `_recapture(target)` を `server.py` に戻す。クリック連動の変更で一度削除したもの）、`capture_window` / `capture_monitor` と同じ形式（JPEG ＋ メタデータ JSON、新しい `captureId` を含む）で返す。
 - 時間切れなら画像なしで `{"pressed": false}` を返す。
 - 撮り直しに失敗したら（ウィンドウが閉じられた、最小化された など）、既存のツールと同じくエラーとして返す。
 - 表示中のページがない（`show_annotated` をまだ呼んでいない）ときは、待たずにエラーを返す。
 - 同時に待てるのは 1 つだけ。2 つ目の呼び出しは、先の待ちを「取り消し」として終わらせてから待ちを引き継ぐ（中断されたターンの待ちが残っても詰まらないようにするため）。
-- `timeout_seconds` は 1〜600 に丸める。
+- `timeout_seconds` は 1〜110 に丸める。
+- Esc で中断したときにサーバーへ取り消し通知（`notifications/cancelled`）が届くかは、ドキュメントに記載がないため実装時に実機で確かめる。届かなくても、次の待ちによる取り消しと時間切れで片づく。
 
 ### 5.2 `show_annotated` の `explanation`（`server.py`、`viewer.py`）
 
@@ -111,7 +112,7 @@
 | 撮り直しに失敗 | ツールがエラーを返し、ページは `error` 状態。Claude はチャットで原因を伝える |
 | Claude のターンが Esc で中断された | 待ちは時間切れまで残るが、次の `wait_for_next_step` か時間切れで片づく。それまでに押された場合は撮り直した画像が誰にも読まれずに捨てられる（害はない） |
 | タブが閉じられた | 既存どおり。次の `show_annotated` でブラウザを開き直す |
-| MCP ツールの待ち時間上限 | 300 秒で区切るので通常は当たらない。上限の実際の値は実装時に確認し、必要なら既定値を下げる |
+| MCP ツールの待ち時間・バックグラウンド化 | 1 回 90 秒（上限 110 秒）で区切るので、2 分のバックグラウンド化にも待ち時間の上限にも当たらない |
 
 ## 7. テスト
 
