@@ -24,7 +24,9 @@ what they are looking at, or a specific app window, capture it instead of asking
 to describe it. For a specific app, call capture_window with part of its title; if \
 several windows match, the error lists candidates, so retry with window_id. Every \
 capture returns a JPEG plus JSON metadata, where screen coordinates = origin + image \
-coordinates / scale (physical pixels). To point at things on screen, call \nshow_annotated with the capture's captureId and HTML positioned in that image's pixel \ncoordinates; it opens in the user's browser."""
+coordinates / scale (physical pixels). To point at things on screen, call \
+show_annotated with the capture's captureId and HTML positioned in that image's pixel \
+coordinates; it opens in the user's browser."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
@@ -119,8 +121,14 @@ def show_annotated(capture_id: str, html: str, title: str | None = None) -> str:
         title or meta["source"],
         secrets.token_urlsafe(16),
     )
-    path = annotate.save_page(page, annotate.ANNOTATION_DIR)
-    annotate.open_in_browser(path)
+    try:
+        path = annotate.save_page(page, annotate.ANNOTATION_DIR)
+    except OSError as error:
+        raise ToolError(f"注釈ページを保存できませんでした: {error}") from error
+    try:
+        annotate.open_in_browser(path)
+    except OSError as error:
+        raise ToolError(f"ページは保存しましたが、ブラウザで開けませんでした: {path}（{error}）") from error
     return f"ブラウザで表示しました: {path}"
 
 

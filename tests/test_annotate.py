@@ -1,4 +1,5 @@
 import base64
+import pathlib
 
 from ai_desktop.annotate import render_page, save_page
 
@@ -71,3 +72,20 @@ def test_save_page_keeps_only_newest(tmp_path):
     assert "annotated-20000104-000000-000000-aaaaaa.html" in remaining
     assert "annotated-20000103-000000-000000-aaaaaa.html" in remaining
     assert unrelated.exists()
+
+
+def test_save_page_survives_locked_old_page(tmp_path, monkeypatch):
+    for day in range(1, 5):
+        (tmp_path / f"annotated-2000010{day}-000000-000000-aaaaaa.html").write_text("old", encoding="utf-8")
+    real_unlink = pathlib.Path.unlink
+
+    def locked_unlink(self, *args, **kwargs):
+        if self.name.startswith("annotated-2000"):
+            raise PermissionError("locked")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", locked_unlink)
+
+    path = save_page("new", tmp_path, keep=3)
+
+    assert path.exists()

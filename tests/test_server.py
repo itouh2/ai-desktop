@@ -173,3 +173,38 @@ def test_show_annotated_rejects_empty_html(opened, html):
     assert result.is_error
     assert "html が空です" in result.content[0].text
     assert opened == []
+
+
+def test_instructions_are_one_paragraph():
+    assert "\n" not in server.INSTRUCTIONS
+    assert "show_annotated" in server.INSTRUCTIONS
+
+
+def test_show_annotated_reports_save_failure(opened, monkeypatch):
+    def fail(page, directory):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(annotate, "save_page", fail)
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert result.is_error
+    assert "注釈ページを保存できませんでした" in result.content[0].text
+    assert "disk full" in result.content[0].text
+    assert opened == []
+
+
+def test_show_annotated_reports_browser_failure(monkeypatch, tmp_path):
+    def fail(path):
+        raise OSError("no association")
+
+    monkeypatch.setattr(annotate, "ANNOTATION_DIR", tmp_path)
+    monkeypatch.setattr(annotate, "open_in_browser", fail)
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
+    assert result.is_error
+    text = result.content[0].text
+    assert "ブラウザで開けませんでした" in text
+    assert "no association" in text
+    pages = list(tmp_path.glob("annotated-*.html"))
+    assert len(pages) == 1
+    assert pages[0].name in text

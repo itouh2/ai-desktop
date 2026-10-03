@@ -91,7 +91,10 @@ def save_page(page: str, directory: Path, keep: int = KEEP_PAGES) -> Path:
     path.write_text(page, encoding="utf-8")
     others = sorted(p for p in directory.glob("annotated-*.html") if p != path)
     for old in others[: max(0, len(others) - (keep - 1))]:
-        old.unlink(missing_ok=True)
+        try:
+            old.unlink(missing_ok=True)
+        except OSError:
+            pass  # pruning is best-effort; a locked old page must not fail the save
     return path
 
 
