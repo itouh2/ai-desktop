@@ -42,7 +42,7 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 | `list_windows` | 表示中のウィンドウ一覧（最小化中も含む。id・タイトル・アプリ・位置とサイズ・最小化中か・アクティブか） |
 | `capture_monitor` | モニター全体を撮影（省略時はプライマリ） |
 | `capture_window` | ウィンドウを撮影（`window_id` か `title` の部分一致） |
-| `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねたページをブラウザで開く（`captureId` を指定） |
+| `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねたページをブラウザで開く（撮影メタデータの `captureId` を `capture_id` に指定） |
 
 撮影結果は JPEG（長辺 1568px 以下）と座標メタデータです。画面座標 = `origin + 画像上の座標 ÷ scale`（物理ピクセル）。
 
@@ -52,6 +52,7 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 - DRM 保護された内容は黒く写ることがあります。
 - 管理者権限で動いているウィンドウは撮影できない場合があります。
 - 撮影ツールはディスクに保存しません。`show_annotated` のページ（スクショ入り）は `%TEMP%\ai-desktop\annotations\` に直近30件まで保存されます。
+- `show_annotated` のページは外部からの読み込みを遮断していますが、ページ移動（`<meta http-equiv="refresh">` など）は防げません。画面に怪しい指示が映っているときは注意してください。
 
 ## 実機の動作確認
 

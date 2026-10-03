@@ -117,7 +117,7 @@ Claude が生成した HTML をそのまま表示するので、ページに CSP
 default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-<毎回ランダム>'
 ```
 
-- 外部への通信（画像・フォント・スクリプトの読み込み）はすべて遮断する。
+- 外部からの読み込み（画像・フォント・スクリプト）はすべて遮断する。ただし CSP ではページ移動は止められないため、Claude の HTML に `<meta http-equiv="refresh">` などが含まれると、開いた時点で外部 URL へ移動しうる（§7）。
 - Claude の HTML に含まれる `<script>` は、ナンスがないので実行されない。
 - `title` は HTML エスケープする。
 
@@ -156,3 +156,4 @@ default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-
 - ページは静的。スクリプトを使った動きやクリック操作はできない。
 - `.html` の関連付けが既定のブラウザ以外になっている環境では、そのアプリで開く。
 - 撮影から 10 件以上あとでは、古い `captureId` は使えない（撮り直しが必要）。
+- 注釈 HTML に `<meta http-equiv="refresh">`、`<link rel="dns-prefetch">`、`<form>`、リンクなどが含まれると、外部へのページ移動や DNS 問い合わせが起こりうる。URL に含めた文字列（画面から読み取った内容など）が外部に送られる経路になるため、画面上の指示（プロンプトインジェクション）に注意する。2026-10-03 のレビューで指摘、ユーザー判断で今回は未対応。

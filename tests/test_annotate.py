@@ -21,6 +21,15 @@ def test_page_has_strict_csp_with_nonce():
     assert '<script nonce="n0nce">' in page
 
 
+def test_fit_script_is_in_head_before_claude_html():
+    page = render_page(**PAGE_ARGS)
+    script = page.index('<script nonce="n0nce">')
+    assert script < page.index("</head>")
+    assert script < page.index('<div id="annotations">')
+    assert "DOMContentLoaded" in page
+    assert "html { overflow-y: scroll; }" in page
+
+
 def test_stage_matches_image_size():
     assert 'id="stage" style="width:1568px;height:882px"' in render_page(**PAGE_ARGS)
 

@@ -23,7 +23,7 @@ class CaptureStore:
         with self._lock:
             capture_id = f"c{self._next_number}"
             self._next_number += 1
-            self._items[capture_id] = (background_jpeg, meta)
+            self._items[capture_id] = (background_jpeg, {**meta, "captureId": capture_id})
             while len(self._items) > self._limit:
                 self._items.popitem(last=False)
             return capture_id
@@ -38,4 +38,5 @@ class CaptureStore:
                     f"（保持しているのは直近 {self._limit} 件: {available}）。"
                     "撮影し直してから指定してください。"
                 )
-            return item
+            background_jpeg, meta = item
+            return background_jpeg, dict(meta)

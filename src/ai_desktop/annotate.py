@@ -15,6 +15,7 @@ KEEP_PAGES = 30
 
 _CSS = """
 html, body { margin: 0; background: #1e1e1e; }
+html { overflow-y: scroll; }
 #viewport { position: relative; width: 100%; overflow: hidden; }
 #stage { position: relative; transform-origin: 0 0; }
 #shot { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -42,15 +43,15 @@ _ARROWHEAD = (
 
 # Scale the whole stage to the window width, so annotations stay on their image pixels.
 _FIT_SCRIPT = """
-const stage = document.getElementById("stage");
-const viewport = document.getElementById("viewport");
 function fit() {
+  const stage = document.getElementById("stage");
+  const viewport = document.getElementById("viewport");
   const scale = document.documentElement.clientWidth / stage.offsetWidth;
   stage.style.transform = "scale(" + scale + ")";
   viewport.style.height = stage.offsetHeight * scale + "px";
 }
+addEventListener("DOMContentLoaded", fit);
 addEventListener("resize", fit);
-fit();
 """
 
 
@@ -71,6 +72,7 @@ def render_page(
         f'<meta http-equiv="Content-Security-Policy" content="{csp}">\n'
         f"<title>{html_lib.escape(title)}</title>\n"
         f"<style>{_CSS}</style>\n"
+        f'<script nonce="{nonce}">{_FIT_SCRIPT}</script>\n'
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="viewport">'
@@ -78,7 +80,6 @@ def render_page(
         f'<img id="shot" src="data:image/jpeg;base64,{background}" alt="">'
         f'<div id="annotations">{html}</div>'
         "</div></div>\n"
-        f'<script nonce="{nonce}">{_FIT_SCRIPT}</script>\n'
         "</body></html>\n"
     )
 

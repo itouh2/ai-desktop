@@ -175,6 +175,18 @@ def test_show_annotated_rejects_empty_html(opened, html):
     assert opened == []
 
 
+@pytest.mark.parametrize("length, expected_error", [(100_000, False), (100_001, True)])
+def test_show_annotated_html_length_limit(opened, length, expected_error):
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "html": "x" * length})
+    assert result.is_error is expected_error
+    if expected_error:
+        assert "html が長すぎます" in result.content[0].text
+        assert opened == []
+    else:
+        assert len(opened) == 1
+
+
 def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS

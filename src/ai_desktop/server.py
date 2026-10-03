@@ -46,7 +46,8 @@ def _reported() -> Iterator[None]:
 def _capture_result(image: PILImage.Image, source: str, origin_x: int, origin_y: int) -> list[Image | str]:
     shrunk, scale = shrink(image)
     meta = build_meta(source, origin_x, origin_y, image.size, shrunk.size, scale)
-    meta["captureId"] = captures.add(encode_jpeg(image, quality=BACKGROUND_JPEG_QUALITY), meta)
+    capture_id = captures.add(encode_jpeg(image, quality=BACKGROUND_JPEG_QUALITY), meta)
+    meta["captureId"] = capture_id
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(meta, ensure_ascii=False)]
 
 
