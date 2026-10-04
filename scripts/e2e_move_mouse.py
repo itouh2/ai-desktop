@@ -66,12 +66,13 @@ async def check(client: Client, lines: queue.Queue, tool: str, arguments: dict, 
 
     shot = await client.call_tool(tool, arguments)
     meta = json.loads(shot.content[1].text)
-    x, y = point_of(meta, window)
+    x, y = point_of(meta, window, 0.5)
     result = await client.call_tool("move_mouse", {"capture_id": meta["captureId"], "x": x, "y": y})
     assert not result.is_error, result.content[0].text
     hover_meta = json.loads(result.content[1].text)
     image = Image.open(io.BytesIO(base64.b64decode(result.content[0].data))).convert("RGB")
-    pixel = image.getpixel((round(x), round(y)))
+    sample_x, sample_y = point_of(meta, window, 0.15)
+    pixel = image.getpixel((round(sample_x), round(sample_y)))
     state = latest(lines, 1.0)
     print(tool, "->", hover_meta["captureId"], "pixel", pixel, "state", state, "cursor", control.cursor_pos())
     assert is_hover_color(pixel), f"the capture does not show the hover color: {pixel}"
@@ -80,15 +81,15 @@ async def check(client: Client, lines: queue.Queue, tool: str, arguments: dict, 
     assert hover_meta["cursorRestored"] is True
 
 
-def window_middle(meta: dict, window) -> tuple[float, float]:
-    return meta["imageWidth"] / 2, meta["imageHeight"] / 2
+def window_middle(meta: dict, window, fraction: float = 0.5) -> tuple[float, float]:
+    return meta["imageWidth"] * fraction, meta["imageHeight"] * fraction
 
 
-def window_middle_on_monitor(meta: dict, window) -> tuple[float, float]:
+def window_middle_on_monitor(meta: dict, window, fraction: float = 0.5) -> tuple[float, float]:
     scale = meta["scale"]
     return (
-        (window.x - meta["originX"] + window.width / 2) * scale,
-        (window.y - meta["originY"] + window.height / 2) * scale,
+        (window.x - meta["originX"] + window.width * fraction) * scale,
+        (window.y - meta["originY"] + window.height * fraction) * scale,
     )
 
 
@@ -101,6 +102,7 @@ async def run_on(geometry: str, tool: str, arguments: dict, point_of) -> None:
             await check(client, lines, tool, arguments, point_of)
     finally:
         app.terminate()
+        app.wait(timeout=5)
 
 
 async def main() -> None:
