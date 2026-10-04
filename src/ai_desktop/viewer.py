@@ -16,13 +16,12 @@ from urllib.parse import parse_qs, urlsplit
 from ai_desktop.annotate import MAX_MESSAGE_CHARS, VIEWER_TITLE_PREFIX, content_security_policy, render_shell
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError
-from ai_desktop.pointer import Pointer
+from ai_desktop.pointer import SETTLE_SECONDS, Pointer
 
 _log = logging.getLogger(__name__)
 
 ACK_TIMEOUT_SECONDS = 1.5
 HEARTBEAT_SECONDS = 15.0
-SETTLE_SECONDS = 0.15  # after minimizing the browser, before the click arrives
 AFTER_CLICK_SECONDS = 0.3  # games handle a click on a later frame; keep focus and cursor until then
 MAX_BODY_BYTES = 16 * 1024  # fits a MAX_MESSAGE_CHARS message even with every character \u-escaped
 TOKEN_HEADER = "X-AI-Desktop-Token"

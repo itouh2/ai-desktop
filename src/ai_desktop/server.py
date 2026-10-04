@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
@@ -23,14 +24,14 @@ from ai_desktop.viewer import Viewer
 INSTRUCTIONS = """\
 Gives you eyes on the user's Windows desktop. When the user asks about their screen, \
 what they are looking at, or a specific app window, capture it instead of asking them \
-to describe it. To read something that only appears while the cursor rests on it (a tooltip, hover text, \
+to describe it. For a specific app, call capture_window with part of its title; if \
+several windows match, the error lists candidates, so retry with window_id. Every \
+capture returns a JPEG plus JSON metadata, where screen coordinates = origin + image \
+coordinates / scale (physical pixels). To read something that only appears while the cursor rests on it (a tooltip, hover text, \
 the description of an icon), call move_mouse with a capture's captureId and a point on that \
 image: it moves the user's real cursor there, waits, captures the same target again and puts \
 the cursor back, and it never clicks, so use it when the user is not using the mouse. \
-For a specific app, call capture_window with part of its title; if \
-several windows match, the error lists candidates, so retry with window_id. Every \
-capture returns a JPEG plus JSON metadata, where screen coordinates = origin + image \
-coordinates / scale (physical pixels). To point at things on screen, call \
+To point at things on screen, call \
 show_annotated with the capture's captureId and HTML positioned in that image's pixel \
 coordinates; it shows in the user's browser, reusing the open viewer tab, and the user \
 can click on the page to click the real screen. The page can also be a way for the \
@@ -234,7 +235,9 @@ def move_mouse(
 ) -> list[Image | str]:
     """Rest the mouse cursor on a point of one of your captures, wait, and capture the same
     window or monitor again, to read what only appears while the cursor is on something
-    (tooltips, hover text, descriptions of icons). It never clicks. It moves the user's real
+    (tooltips, hover text, descriptions of icons). It never clicks. For a window capture it brings that
+    window to the front first; a viewer browser covering a monitor capture is minimized for the
+    moment and put back, and focus returns to the window that had it. It moves the user's real
     cursor for a moment, so use it when the user is not using the mouse.
 
     capture_id: the captureId from a capture's metadata (the latest 10 are kept).
@@ -253,7 +256,12 @@ def move_mouse(
                 inputs.move(*spot.screen)
                 _sleep(wait)
                 shrunk, meta = _recapture(target)
-            finally:
+            except BaseException:
+                if restore_cursor:
+                    with contextlib.suppress(CaptureError):
+                        inputs.move(*spot.cursor)
+                raise
+            else:
                 if restore_cursor:
                     inputs.move(*spot.cursor)
     result = {**meta, "hover": {"x": x, "y": y, "captureId": capture_id}, "cursorRestored": restore_cursor}

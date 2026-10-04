@@ -428,6 +428,30 @@ def test_move_mouse_puts_the_cursor_back_when_the_recapture_fails(mouse, monkeyp
     assert mouse.control.calls[-1] == ("restore", BROWSER)
 
 
+def test_move_mouse_recapture_failure_without_restore_cursor_does_not_move_back(mouse, monkeypatch):
+    call("capture_window", {"title": "excel"})
+
+    def gone(hwnd):
+        raise CaptureError("window_id 42 のウィンドウは存在しません。")
+
+    monkeypatch.setattr(capture, "capture_window", gone)
+    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20, "restore_cursor": False})
+    assert result.is_error
+    assert mouse.moves == [(110, 220)]
+
+
+def test_move_mouse_gives_focus_back_without_touching_the_browser(monkeypatch):
+    control = FakeControl(foreground=999)
+    monkeypatch.setattr(server, "pointer", Pointer(server.captures, control, settle_seconds=0))
+    monkeypatch.setattr(inputs, "move", lambda x, y: None)
+    monkeypatch.setattr(server, "_sleep", lambda seconds: None)
+    call("capture_window", {"title": "excel"})
+    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
+    assert not result.is_error
+    assert ("restore", BROWSER) not in control.calls
+    assert ("restore", 999) in control.calls
+
+
 def test_move_mouse_on_a_monitor_clears_the_browser_first(mouse):
     call("capture_monitor")  # c1: 3200x1600 shown at 0.49
     result = call("move_mouse", {"capture_id": "c1", "x": 49, "y": 98})

@@ -77,6 +77,7 @@ async def check(client: Client, lines: queue.Queue, tool: str, arguments: dict, 
     print(tool, "->", hover_meta["captureId"], "pixel", pixel, "state", state, "cursor", control.cursor_pos())
     assert is_hover_color(pixel), f"the capture does not show the hover color: {pixel}"
     assert state.get("enter", 0) >= 1 and state.get("leave", 0) >= 1, state
+    assert state.get("single", 0) == 0 and state.get("double", 0) == 0, state
     assert control.cursor_pos() == away, (control.cursor_pos(), away)
     assert hover_meta["cursorRestored"] is True
 

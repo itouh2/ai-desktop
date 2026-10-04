@@ -33,6 +33,7 @@ def test_window_target_is_brought_to_front_and_followed(pointer, control):
     assert control.calls == [
         ("find_window", "ai-desktop | "),
         ("cursor_pos",),
+        ("foreground_window",),
         ("bring_to_front", 42),
         ("window_origin", 42),
         ("restore", BROWSER),
@@ -108,3 +109,34 @@ def test_only_one_operation_at_a_time(pointer):
                 pass
     finally:
         pointer.lock.release()
+
+
+def test_focus_goes_back_to_the_window_that_had_it_and_the_browser_is_left_alone(store):
+    control = FakeControl(foreground=999)
+    with Pointer(store, control, settle_seconds=0).at("c2", 10, 20, keep_clear="point"):
+        pass
+    restores = [call for call in control.calls if call[0] == "restore"]
+    assert restores == [("restore", 999)]
+
+
+def test_a_browser_minimized_by_this_call_comes_back_before_focus_returns(store):
+    control = FakeControl(foreground=999, browser_rect=(3000, 0, 3840, 1000))
+    with Pointer(store, control, settle_seconds=0).at("c1", 49, 98, keep_clear="capture"):
+        pass
+    restores = [call for call in control.calls if call[0] == "restore"]
+    assert restores == [("restore", BROWSER), ("restore", 999)]
+
+
+def test_a_minimized_browser_that_was_in_front_is_restored_once(store):
+    control = FakeControl(foreground=BROWSER, browser_rect=(3000, 0, 3840, 1000))
+    with Pointer(store, control, settle_seconds=0).at("c1", 49, 98, keep_clear="capture"):
+        pass
+    restores = [call for call in control.calls if call[0] == "restore"]
+    assert restores == [("restore", BROWSER)]
+
+
+def test_no_foreground_window_means_nothing_to_give_focus_back_to(store):
+    control = FakeControl(foreground=0)
+    with Pointer(store, control, settle_seconds=0).at("c2", 10, 20, keep_clear="point"):
+        pass
+    assert not any(call[0] == "restore" for call in control.calls)

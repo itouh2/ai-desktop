@@ -26,7 +26,7 @@ class Pointer:
     """Runs one operation at a time at a point of a capture.
 
     control is the ai_desktop.control module in production; tests pass a fake with the same
-    functions (find_window, cursor_pos, bring_to_front, window_origin, window_rect, minimize,
+    functions (find_window, cursor_pos, foreground_window, bring_to_front, window_origin, window_rect, minimize,
     is_minimized, restore). lock is shared with the viewer's re-capture."""
 
     def __init__(self, store: CaptureStore, control: Any, settle_seconds: float = SETTLE_SECONDS) -> None:
@@ -42,8 +42,8 @@ class Pointer:
         """Get ready to operate at (x, y) of the capture and yield where that is on screen.
 
         keep_clear="point" minimizes a browser covering the point; "capture" minimizes one
-        overlapping the captured area. The browser always comes back afterwards; the cursor
-        is left to the caller."""
+        overlapping the captured area. A browser minimized here comes back afterwards and focus
+        returns to the window that had it; the cursor is left to the caller."""
         if not self.lock.acquire(blocking=False):
             raise CaptureError("ほかの操作を実行中です。終わるまで待ってください。")
         try:
@@ -57,6 +57,8 @@ class Pointer:
                     "表示中のブラウザと同じウィンドウは操作できません。対象のタブを別のウィンドウに分けてください。"
                 )
             cursor = self._control.cursor_pos()
+            previous = self._control.foreground_window()
+            minimized = False
             try:
                 origin = None
                 if target.kind == "window":
@@ -67,13 +69,16 @@ class Pointer:
                 screen = image_to_screen(meta, x, y, origin)
                 if browser is not None and target.kind == "monitor" and self._in_the_way(browser, screen, meta, keep_clear):
                     self._control.minimize(browser)
+                    minimized = True
                     time.sleep(self._settle_seconds)
                     if not self._control.is_minimized(browser):
                         raise CaptureError("ブラウザを最小化できなかったため、操作しませんでした。")
                 yield Spot(screen=screen, cursor=cursor)
             finally:
-                if browser is not None:
+                if minimized:
                     self._control.restore(browser)
+                if previous and not (minimized and previous == browser):
+                    self._control.restore(previous)
         finally:
             self.lock.release()
 

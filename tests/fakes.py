@@ -19,11 +19,13 @@ class FakeControl:
         browser_rect=(0, 0, 1000, 1000),
         minimize_ok=True,
         fail_rect=False,
+        foreground=BROWSER,
     ):
         self.calls = []
         self.times = {}
         self.minimize_ok = minimize_ok
         self.fail_rect = fail_rect
+        self.foreground = foreground
         self.browser_rect = browser_rect
         self.front_ok = front_ok
         self.browser = browser
@@ -37,6 +39,10 @@ class FakeControl:
     def cursor_pos(self):
         self.calls.append(("cursor_pos",))
         return (5, 6)
+
+    def foreground_window(self):
+        self.calls.append(("foreground_window",))
+        return self.foreground
 
     def minimize(self, hwnd):
         self.calls.append(("minimize", hwnd))

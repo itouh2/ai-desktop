@@ -46,6 +46,7 @@ def test_click_on_window_capture_follows_the_window(viewer, control):
     assert control.calls == [
         ("find_window", "ai-desktop | "),
         ("cursor_pos",),
+        ("foreground_window",),
         ("bring_to_front", 42),
         ("window_origin", 42),
         ("click", 110, 220, False),
