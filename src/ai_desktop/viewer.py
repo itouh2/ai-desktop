@@ -15,7 +15,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from ai_desktop.annotate import MAX_MESSAGE_CHARS, VIEWER_TITLE_PREFIX, content_security_policy, render_shell
 from ai_desktop.captures import CaptureStore, Target
-from ai_desktop.imaging import CaptureError, image_to_screen
+from ai_desktop.imaging import CaptureError
+from ai_desktop.pointer import Pointer
 
 _log = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class Viewer:
         after_click_seconds: float = AFTER_CLICK_SECONDS,
         ack_timeout: float = ACK_TIMEOUT_SECONDS,
         heartbeat_seconds: float = HEARTBEAT_SECONDS,
+        pointer: Pointer | None = None,
     ) -> None:
         self._store = store
         self._control = control
@@ -78,7 +80,7 @@ class Viewer:
         self._version = 0
         self._acked = 0
         self._clients = 0
-        self._operating = threading.Lock()
+        self._pointer = pointer if pointer is not None else Pointer(store, control, settle_seconds)
         self._state = "idle"
         self._state_version = 1  # new tabs receive the current state right away
         self._wait_generation = 0
@@ -221,7 +223,7 @@ class Viewer:
 
     def recapture_current(self, recapture: Callable[[Target], Any]) -> Any:
         """Capture the target of the view on screen again (waits for a click in progress)."""
-        with self._operating:
+        with self._pointer.lock:
             with self._changed:
                 if self._view is None:
                     raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
@@ -273,42 +275,12 @@ class Viewer:
 
     def perform_click(self, capture_id: str, x: float, y: float, double: bool) -> None:
         """Click the real screen where (x, y) is on the capture. The page is left as it is."""
-        if not self._operating.acquire(blocking=False):
-            raise CaptureError("ほかの操作を実行中です。終わるまで待ってください。")
-        try:
-            _, meta = self._store.get(capture_id)
-            target = self._store.target(capture_id)
-            if not (0 <= x < meta["imageWidth"] and 0 <= y < meta["imageHeight"]):
-                raise CaptureError("クリック位置が画像の外です。")
-            browser = self._control.find_window(VIEWER_TITLE_PREFIX)
-            if target.kind == "window" and target.id == browser:
-                raise CaptureError(
-                    "表示中のブラウザと同じウィンドウは操作できません。対象のタブを別のウィンドウに分けてください。"
-                )
-            cursor = self._control.cursor_pos()
+        with self._pointer.at(capture_id, x, y, keep_clear="point") as spot:
             try:
-                origin = None
-                if target.kind == "window":
-                    # Bringing the target to the front also lifts it above the browser.
-                    if not self._control.bring_to_front(target.id):
-                        raise CaptureError("対象のウィンドウを前面に出せませんでした。もう一度クリックしてください。")
-                    origin = self._control.window_origin(target.id)
-                screen_x, screen_y = image_to_screen(meta, x, y, origin)
-                if browser is not None and target.kind == "monitor":
-                    left, top, right, bottom = self._control.window_rect(browser)
-                    if left <= screen_x < right and top <= screen_y < bottom:
-                        self._control.minimize(browser)
-                        time.sleep(self._settle_seconds)
-                        if not self._control.is_minimized(browser):
-                            raise CaptureError("ブラウザを最小化できなかったため、クリックしませんでした。")
-                self._control.click(screen_x, screen_y, double)
+                self._control.click(*spot.screen, double)
                 time.sleep(self._after_click_seconds)
             finally:
-                self._control.set_cursor(*cursor)
-                if browser is not None:
-                    self._control.restore(browser)
-        finally:
-            self._operating.release()
+                self._control.set_cursor(*spot.cursor)
 
     # --- used by the request handler -------------------------------------------------------
 

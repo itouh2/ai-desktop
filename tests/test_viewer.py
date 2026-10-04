@@ -6,79 +6,11 @@ import urllib.error
 import urllib.request
 
 import pytest
+from fakes import BROWSER, FakeControl
 
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta
 from ai_desktop.viewer import TOKEN_HEADER, Viewer
-
-BROWSER = 777
-
-
-class FakeControl:
-    """Records every control call in order instead of touching the real desktop."""
-
-    def __init__(
-        self,
-        browser=BROWSER,
-        origin=(100, 200),
-        fail_origin=False,
-        front_ok=True,
-        browser_rect=(0, 0, 1000, 1000),
-        minimize_ok=True,
-        fail_rect=False,
-    ):
-        self.calls = []
-        self.times = {}
-        self.minimize_ok = minimize_ok
-        self.fail_rect = fail_rect
-        self.browser_rect = browser_rect
-        self.front_ok = front_ok
-        self.browser = browser
-        self.origin = origin
-        self.fail_origin = fail_origin
-
-    def find_window(self, fragment):
-        self.calls.append(("find_window", fragment))
-        return self.browser
-
-    def cursor_pos(self):
-        self.calls.append(("cursor_pos",))
-        return (5, 6)
-
-    def minimize(self, hwnd):
-        self.calls.append(("minimize", hwnd))
-
-    def is_minimized(self, hwnd):
-        self.calls.append(("is_minimized", hwnd))
-        return self.minimize_ok
-
-    def bring_to_front(self, hwnd):
-        self.calls.append(("bring_to_front", hwnd))
-        return self.front_ok
-
-    def window_origin(self, hwnd):
-        self.calls.append(("window_origin", hwnd))
-        if self.fail_origin:
-            raise CaptureError("操作対象のウィンドウが見つかりません。撮影し直してください。")
-        return self.origin
-
-    def window_rect(self, hwnd):
-        self.calls.append(("window_rect", hwnd))
-        if self.fail_rect:
-            raise CaptureError("ブラウザのウィンドウの位置を取得できませんでした。")
-        return self.browser_rect
-
-    def click(self, x, y, double):
-        self.calls.append(("click", x, y, double))
-        self.times["click"] = time.monotonic()
-
-    def set_cursor(self, x, y):
-        self.calls.append(("set_cursor", x, y))
-        self.times["set_cursor"] = time.monotonic()
-
-    def restore(self, hwnd):
-        self.calls.append(("restore", hwnd))
-
 
 MONITOR_META = build_meta("monitor:1 DISPLAY1", 0, 0, (3200, 1600), (1568, 784), 0.49)
 WINDOW_META = build_meta("window:42 Book1 - Excel", -100, 50, (800, 600), (800, 600), 1.0)
@@ -148,16 +80,16 @@ def test_click_is_skipped_when_the_browser_cannot_be_minimized(viewer, control):
     control.minimize_ok = False
     with pytest.raises(CaptureError, match="最小化できなかった"):
         viewer.perform_click("c1", 49, 98, False)
-    assert not any(call[0] == "click" for call in control.calls)
-    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
 
 
 def test_failed_browser_rect_still_restores(viewer, control):
     control.fail_rect = True
     with pytest.raises(CaptureError, match="位置を取得できませんでした"):
         viewer.perform_click("c1", 49, 98, False)
-    assert not any(call[0] == "click" for call in control.calls)
-    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
 
 
 def test_monitor_click_beside_the_browser_does_not_minimize_it(viewer, control):
@@ -172,15 +104,26 @@ def test_failed_click_still_restores_cursor_and_browser(viewer, control):
     control.fail_origin = True
     with pytest.raises(CaptureError, match="操作対象のウィンドウが見つかりません"):
         viewer.perform_click("c2", 10, 20, False)
-    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
-    assert not any(call[0] == "click" for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
 
 
 def test_click_is_skipped_when_the_target_cannot_be_brought_to_front(viewer, control):
     control.front_ok = False
     with pytest.raises(CaptureError, match="前面に出せませんでした"):
         viewer.perform_click("c2", 10, 20, False)
-    assert not any(call[0] == "click" for call in control.calls)
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
+
+
+def test_click_that_fails_after_moving_restores_the_cursor(viewer, control, monkeypatch):
+    def broken_click(x, y, double):
+        control.calls.append(("click", x, y, double))
+        raise CaptureError("入力を送れませんでした（Win32 エラー 5）。")
+
+    monkeypatch.setattr(control, "click", broken_click)
+    with pytest.raises(CaptureError, match="入力を送れませんでした"):
+        viewer.perform_click("c2", 10, 20, False)
     assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
 
 
@@ -198,12 +141,12 @@ def test_click_on_the_viewer_browser_itself_is_rejected(viewer, control):
 
 
 def test_only_one_operation_at_a_time(viewer):
-    viewer._operating.acquire()
+    viewer._pointer.lock.acquire()
     try:
         with pytest.raises(CaptureError, match="ほかの操作を実行中"):
             viewer.perform_click("c2", 10, 20, False)
     finally:
-        viewer._operating.release()
+        viewer._pointer.lock.release()
 
 
 # --- HTTP ------------------------------------------------------------------------------------
