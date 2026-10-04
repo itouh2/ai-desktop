@@ -188,3 +188,4 @@ move_mouse(capture_id: str, x: float, y: float, wait_seconds: float = 0.5, resto
 - ユーザーが直前にマウスを動かしていたら止める検知（pynput の監視、または `GetLastInputInfo`）
 - 複数の点をまとめて巡回するツール
 - PyAutoGUI / pynput への差し替え（§3.1）
+- 既知の制限: ウィンドウ撮影（PrintWindow）は、別ウィンドウとして出るツールチップを写さない。一般的な Windows アプリではモニター撮影の画像に対して `move_mouse` を使う（README とスキルに記載）。必要になれば、`move_mouse` にウィンドウ対象でもモニター範囲で撮る選択肢を足す

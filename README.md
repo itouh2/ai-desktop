@@ -47,6 +47,7 @@ claude mcp list   # ai-desktop が ✓ Connected になっていれば OK
 | `capture_window` | ウィンドウを撮影（`window_id` か `title` の部分一致） |
 | `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねてブラウザに表示する（撮影メタデータの `captureId` を `capture_id` に指定）。開いているタブは使い回す。ページ上のクリック・ダブルクリックは実際の画面に伝わる（ページは更新されず、注釈は残る）。`explanation` を付けると説明文が出る。`buttons`（最大6個）や `message_box`（入力欄。Enter で送信、Shift+Enter で改行）を付けると、ページがユーザーから Claude へメッセージを届ける入口になる |
 | `wait_for_message` | ページからメッセージが届くまで待ち（1回最大110秒）、`{"message": …, "via": "button" か "text"}` と撮り直した画面を返す。時間切れなら `{"message": null}` |
+| `move_mouse` | 撮影画像の 1 点にマウスカーソルを乗せ、`wait_seconds`（0〜5 秒、既定 0.5）待ってから同じウィンドウまたはモニターを撮り直す。ツールチップや説明文など、カーソルを乗せたときだけ出る表示を読むためのもの。クリックはしない。既定でカーソルを元の位置に戻す（`restore_cursor`） |
 
 撮影結果は JPEG（長辺 1568px 以下）と座標メタデータです。画面座標 = `origin + 画像上の座標 ÷ scale`（物理ピクセル）。
 
@@ -63,6 +64,8 @@ claude mcp list   # ai-desktop が ✓ Connected になっていれば OK
 - `show_annotated` のページは外部からの読み込みを遮断していますが、ページ移動（`<meta http-equiv="refresh">` など）は防げません。画面に怪しい指示が映っているときは注意してください。
 - ボタンでのやりとりの間、チャットは「実行中」になります。止めるときは Esc を押してください。
 - ボタンで撮り直すのは、表示中の画像と同じウィンドウまたはモニターだけです。別のウィンドウを見てほしいときはチャットで頼んでください。
+- `move_mouse` はユーザーのマウスカーソルを一時的に動かします（既定で元の位置に戻します）。操作中に使うと、操作とぶつかります。
+- ウィンドウ撮影（`capture_window`）には、そのウィンドウの外に別ウィンドウとして出るツールチップは写りません。一般的な Windows アプリのツールチップを読むときは、モニター撮影（`capture_monitor`）の画像に対して `move_mouse` を使ってください（ゲームのように画面の中に描かれる説明文は、ウィンドウ撮影でも写ります）。
 
 ## 実機の動作確認
 
@@ -70,6 +73,7 @@ claude mcp list   # ai-desktop が ✓ Connected になっていれば OK
 uv run python scripts/smoke.py   # smoke-out/ に monitor.png と window.png を保存
 uv run python scripts/control_smoke.py   # クリック・前面化・最小化の確認（試験用ウィンドウが開きます）
 uv run python scripts/e2e_viewer.py      # タブの再利用とページ経由のクリックの確認（ブラウザのタブが開きます）
+uv run python scripts/e2e_move_mouse.py  # move_mouse の確認（試験用ウィンドウが開きます。実行中はマウスに触らない）
 ```
 
 設計の詳細は [docs/superpowers/specs/2026-10-03-desktop-vision-mcp-design.md](docs/superpowers/specs/2026-10-03-desktop-vision-mcp-design.md) を参照してください。
