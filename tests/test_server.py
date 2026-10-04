@@ -5,12 +5,14 @@ import json
 from dataclasses import asdict
 
 import pytest
+from fakes import BROWSER, FakeControl
 from mcp import Client
 from PIL import Image
 
-from ai_desktop import capture, server
+from ai_desktop import capture, inputs, server
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, MonitorInfo, WindowInfo
+from ai_desktop.pointer import Pointer
 
 MONITOR = MonitorInfo(id=1, name=r"\.\DISPLAY1", primary=True, x=0, y=0, width=3200, height=1600)
 WINDOW = WindowInfo(
@@ -46,7 +48,7 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_six_tools():
+def test_exposes_seven_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
@@ -54,7 +56,7 @@ def test_exposes_six_tools():
     names = {tool.name for tool in asyncio.run(run()).tools}
     assert names == {
         "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
-        "wait_for_message",
+        "wait_for_message", "move_mouse",
     }
 
 
@@ -259,6 +261,7 @@ def test_show_annotated_reports_browser_failure(viewer):
 def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
+    assert "move_mouse" in server.INSTRUCTIONS
     assert "five nulls" in server.INSTRUCTIONS
     assert "without buttons or message_box" in server.INSTRUCTIONS
 
@@ -353,3 +356,88 @@ def test_recapture_takes_the_same_target_again():
     assert server.captures.target("c2") == Target("window", 42)
     assert meta["source"] == "window:42 Book1 - Excel"
     assert shrunk.size == (800, 600)
+
+
+class Mouse:
+    """What move_mouse did: control calls, cursor moves and sleeps."""
+
+    def __init__(self, control):
+        self.control = control
+        self.moves = []
+        self.sleeps = []
+
+
+@pytest.fixture
+def mouse(monkeypatch):
+    mouse = Mouse(FakeControl())
+    monkeypatch.setattr(server, "pointer", Pointer(server.captures, mouse.control, settle_seconds=0))
+    monkeypatch.setattr(inputs, "move", lambda x, y: mouse.moves.append((x, y)))
+    monkeypatch.setattr(inputs, "click", lambda *args, **kwargs: pytest.fail("move_mouse must not click"))
+    monkeypatch.setattr(server, "_sleep", mouse.sleeps.append)
+    return mouse
+
+
+def test_move_mouse_moves_waits_recaptures_and_puts_the_cursor_back(mouse):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
+    assert not result.is_error
+    assert result.content[0].type == "image"
+    meta = json.loads(result.content[1].text)
+    assert meta["captureId"] == "c2"
+    assert meta["hover"] == {"x": 10, "y": 20, "captureId": "c1"}
+    assert meta["cursorRestored"] is True
+    assert mouse.moves == [(110, 220), (5, 6)]
+    assert mouse.sleeps == [0.5]
+    assert ("bring_to_front", 42) in mouse.control.calls
+    assert not any(call[0] == "click" for call in mouse.control.calls)
+
+
+def test_move_mouse_can_leave_the_cursor_where_it_moved(mouse):
+    call("capture_window", {"title": "excel"})
+    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20, "restore_cursor": False})
+    assert json.loads(result.content[1].text)["cursorRestored"] is False
+    assert mouse.moves == [(110, 220)]
+
+
+@pytest.mark.parametrize(("wait", "expected"), [(9, 5.0), (-1, 0.0), (1.25, 1.25)])
+def test_move_mouse_clamps_the_wait(mouse, wait, expected):
+    call("capture_window", {"title": "excel"})
+    call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20, "wait_seconds": wait})
+    assert mouse.sleeps == [expected]
+
+
+def test_move_mouse_outside_the_image_does_not_move(mouse):
+    call("capture_window", {"title": "excel"})
+    result = call("move_mouse", {"capture_id": "c1", "x": 800, "y": 20})
+    assert result.is_error
+    assert "画像の外" in result.content[0].text
+    assert mouse.moves == []
+
+
+def test_move_mouse_puts_the_cursor_back_when_the_recapture_fails(mouse, monkeypatch):
+    call("capture_window", {"title": "excel"})
+
+    def gone(hwnd):
+        raise CaptureError("window_id 42 のウィンドウは存在しません。")
+
+    monkeypatch.setattr(capture, "capture_window", gone)
+    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
+    assert result.is_error
+    assert "存在しません" in result.content[0].text
+    assert mouse.moves == [(110, 220), (5, 6)]
+    assert mouse.control.calls[-1] == ("restore", BROWSER)
+
+
+def test_move_mouse_on_a_monitor_clears_the_browser_first(mouse):
+    call("capture_monitor")  # c1: 3200x1600 shown at 0.49
+    result = call("move_mouse", {"capture_id": "c1", "x": 49, "y": 98})
+    assert not result.is_error
+    assert mouse.moves[0] == (100, 200)
+    assert ("minimize", BROWSER) in mouse.control.calls
+    assert mouse.control.calls[-1] == ("restore", BROWSER)
+
+
+def test_move_mouse_unknown_capture_is_reported(mouse):
+    result = call("move_mouse", {"capture_id": "c9", "x": 1, "y": 1})
+    assert result.is_error
+    assert mouse.moves == []

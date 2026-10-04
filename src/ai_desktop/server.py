@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -13,15 +14,20 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from ai_desktop import capture, control
+from ai_desktop import capture, control, inputs
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
+from ai_desktop.pointer import Pointer
 from ai_desktop.viewer import Viewer
 
 INSTRUCTIONS = """\
 Gives you eyes on the user's Windows desktop. When the user asks about their screen, \
 what they are looking at, or a specific app window, capture it instead of asking them \
-to describe it. For a specific app, call capture_window with part of its title; if \
+to describe it. To read something that only appears while the cursor rests on it (a tooltip, hover text, \
+the description of an icon), call move_mouse with a capture's captureId and a point on that \
+image: it moves the user's real cursor there, waits, captures the same target again and puts \
+the cursor back, and it never clicks, so use it when the user is not using the mouse. \
+For a specific app, call capture_window with part of its title; if \
 several windows match, the error lists candidates, so retry with window_id. Every \
 capture returns a JPEG plus JSON metadata, where screen coordinates = origin + image \
 coordinates / scale (physical pixels). To point at things on screen, call \
@@ -37,6 +43,9 @@ to keep going, show the page again and wait again. If it returns {"message": nul
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
+MOVE_WAIT_DEFAULT_SECONDS = 0.5
+MOVE_WAIT_MAX_SECONDS = 5.0
+_sleep = time.sleep  # replaced in tests
 captures = CaptureStore()
 MAX_HTML_CHARS = 100_000
 MAX_BUTTONS = 6
@@ -94,7 +103,8 @@ def _capture_result(
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(meta, ensure_ascii=False)]
 
 
-viewer = Viewer(captures, control)
+pointer = Pointer(captures, control)
+viewer = Viewer(captures, control, pointer=pointer)
 
 
 @mcp.tool(structured_output=False)
@@ -211,6 +221,42 @@ def wait_for_message(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image 
             return [json.dumps({"message": None})]
         shrunk, meta = viewer.recapture_current(_recapture)
     result = {**reply, **meta}
+    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
+
+
+@mcp.tool()
+def move_mouse(
+    capture_id: str,
+    x: float,
+    y: float,
+    wait_seconds: float = MOVE_WAIT_DEFAULT_SECONDS,
+    restore_cursor: bool = True,
+) -> list[Image | str]:
+    """Rest the mouse cursor on a point of one of your captures, wait, and capture the same
+    window or monitor again, to read what only appears while the cursor is on something
+    (tooltips, hover text, descriptions of icons). It never clicks. It moves the user's real
+    cursor for a moment, so use it when the user is not using the mouse.
+
+    capture_id: the captureId from a capture's metadata (the latest 10 are kept).
+    x, y: the point in that capture's image pixels (imageWidth x imageHeight).
+    wait_seconds: how long the cursor rests before the capture (0-5, default 0.5).
+    restore_cursor: put the cursor back where it was afterwards (default true).
+    Returns a JPEG and JSON metadata like the capture tools, with a new captureId, plus
+    "hover" (the point and the captureId it was on) and "cursorRestored". A window capture
+    shows only that window, so a tooltip drawn as a separate popup appears only in a
+    monitor capture."""
+    wait = max(0.0, min(MOVE_WAIT_MAX_SECONDS, float(wait_seconds)))
+    with _reported():
+        target = captures.target(capture_id)
+        with pointer.at(capture_id, x, y, keep_clear="capture") as spot:
+            try:
+                inputs.move(*spot.screen)
+                _sleep(wait)
+                shrunk, meta = _recapture(target)
+            finally:
+                if restore_cursor:
+                    inputs.move(*spot.cursor)
+    result = {**meta, "hover": {"x": x, "y": y, "captureId": capture_id}, "cursorRestored": restore_cursor}
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
 
 
