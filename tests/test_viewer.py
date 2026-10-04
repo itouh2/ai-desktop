@@ -352,13 +352,13 @@ def test_ack_with_a_malformed_body_is_a_bad_request(viewer):
     assert post(viewer, "/ack", {"version": "x"})[0] == 400
 
 
-# --- page buttons ----------------------------------------------------------------------------
+# --- page messages: buttons ------------------------------------------------------------------
 
 
 def wait_in_background(viewer, timeout=5.0):
-    """Start wait_for_button on a thread; returns (thread, results list)."""
+    """Start wait_for_message on a thread; returns (thread, results list)."""
     results = []
-    thread = threading.Thread(target=lambda: results.append(viewer.wait_for_button(timeout)), daemon=True)
+    thread = threading.Thread(target=lambda: results.append(viewer.wait_for_message(timeout)), daemon=True)
     thread.start()
     for _ in range(100):  # until the viewer is waiting
         if viewer._state == "waiting":
@@ -383,10 +383,10 @@ def test_press_without_a_waiter_is_rejected(viewer):
 
 def test_wait_requires_a_page_with_buttons(viewer):
     with pytest.raises(CaptureError, match="表示中のページがありません"):
-        viewer.wait_for_button(1)
+        viewer.wait_for_message(1)
     viewer.publish("c2", "<div></div>", "Excel")
-    with pytest.raises(CaptureError, match="ボタンがありません"):
-        viewer.wait_for_button(1)
+    with pytest.raises(CaptureError, match="入口がありません"):
+        viewer.wait_for_message(1)
 
 
 def test_pressing_a_shown_button_wakes_the_waiter(viewer):
@@ -396,13 +396,13 @@ def test_pressing_a_shown_button_wakes_the_waiter(viewer):
         viewer.press("やめる")
     viewer.press("分からない")
     thread.join(5)
-    assert results == ["分からない"]
+    assert results == [{"message": "分からない", "via": "button"}]
     assert viewer._state == "thinking"
 
 
 def test_wait_times_out_back_to_idle(viewer):
     viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
-    assert viewer.wait_for_button(0.05) is None
+    assert viewer.wait_for_message(0.05) is None
     assert viewer._state == "idle"
 
 
@@ -414,7 +414,7 @@ def test_a_newer_wait_cancels_the_older_one(viewer):
     assert first_results == [None]
     viewer.press("できた")
     second.join(5)
-    assert second_results == ["できた"]
+    assert second_results == [{"message": "できた", "via": "button"}]
 
 
 def test_failed_recapture_sets_error_until_the_next_page(viewer):
@@ -536,7 +536,7 @@ def test_press_endpoint_checks_auth_and_state(viewer):
     thread, results = wait_in_background(viewer)
     assert post(viewer, "/press", {"button": "できた"}) == (200, {"ok": True})
     thread.join(5)
-    assert results == ["できた"]
+    assert results == [{"message": "できた", "via": "button"}]
 
 
 def test_events_send_the_state_right_after_connecting(viewer):
@@ -548,3 +548,72 @@ def test_events_send_the_state_right_after_connecting(viewer):
     connection.close()
     assert lines[0] == "event: state"
     assert json.loads(lines[1][len("data: "):])["state"] == "idle"
+
+
+# --- page messages: message box --------------------------------------------------------------
+
+
+def test_publish_carries_the_message_box_flag(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", None, True)
+    assert viewer.next_view(0, 0)["messageBox"] is True
+    viewer.publish("c2", "<div></div>", "Excel")
+    assert viewer.next_view(1, 0)["messageBox"] is False
+
+
+def test_a_message_box_alone_is_enough_to_wait(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", None, True)
+    thread, results = wait_in_background(viewer)
+    viewer.send_message("  ブラー+ を引いた\n次は？  ")
+    thread.join(5)
+    assert results == [{"message": "ブラー+ を引いた\n次は？", "via": "text"}]
+    assert viewer._state == "thinking"
+
+
+def test_a_page_without_a_message_box_rejects_typed_messages(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    with pytest.raises(CaptureError, match="入力欄を使えません"):
+        viewer.send_message("こんにちは")
+    viewer.press("できた")
+    thread.join(5)
+    assert results == [{"message": "できた", "via": "button"}]
+
+
+def test_message_without_a_waiter_is_rejected(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"], True)
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.send_message("こんにちは")
+
+
+@pytest.mark.parametrize("text, message", [("   ", "空です"), ("あ" * 1001, "1000 文字まで")])
+def test_empty_or_long_messages_are_rejected(viewer, text, message):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"], True)
+    thread, results = wait_in_background(viewer)
+    with pytest.raises(CaptureError, match=message):
+        viewer.send_message(text)
+    assert viewer._state == "waiting"
+    viewer.send_message("あ" * 1000)
+    thread.join(5)
+    assert results == [{"message": "あ" * 1000, "via": "text"}]
+
+
+def test_publishing_without_any_way_to_send_ends_a_wait(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", None, True)
+    thread, results = wait_in_background(viewer)
+    viewer.publish("c2", "<div></div>", "Excel")
+    thread.join(5)
+    assert results == [None]
+    assert viewer._state == "idle"
+
+
+def test_message_endpoint_checks_auth_and_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"], True)
+    assert post(viewer, "/message", {"text": "やあ"}, token="wrong")[0] == 403
+    assert post(viewer, "/message", {"text": "やあ"}, origin="https://example.com")[0] == 403
+    status, result = post(viewer, "/message", {"text": "やあ"})
+    assert status == 200 and "待ち受けていません" in result["error"]
+    assert post(viewer, "/message", {"text": 1})[0] == 400
+    thread, results = wait_in_background(viewer)
+    assert post(viewer, "/message", {"text": "あ" * 1000}) == (200, {"ok": True})
+    thread.join(5)
+    assert results == [{"message": "あ" * 1000, "via": "text"}]

@@ -54,7 +54,7 @@ def test_exposes_six_tools():
     names = {tool.name for tool in asyncio.run(run()).tools}
     assert names == {
         "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
-        "wait_for_button",
+        "wait_for_message",
     }
 
 
@@ -156,20 +156,20 @@ class FakeViewer:
         self.published = []
         self.opened = 0
         self.focused = 0
-        self.pressed = None
+        self.reply = None
         self.waited = []
         self.target = Target("window", 42)
 
-    def publish(self, capture_id, html, title, explanation="", buttons=None):
+    def publish(self, capture_id, html, title, explanation="", buttons=None, message_box=False):
         if self.start_error is not None:
             raise self.start_error
         self.published.append((capture_id, html, title))
-        self.last_extras = (explanation, buttons)
+        self.last_extras = (explanation, buttons, message_box)
         return self.delivered
 
-    def wait_for_button(self, timeout):
+    def wait_for_message(self, timeout):
         self.waited.append(timeout)
-        return self.pressed
+        return self.reply
 
     def recapture_current(self, recapture):
         return recapture(self.target)
@@ -260,7 +260,7 @@ def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
     assert "five nulls" in server.INSTRUCTIONS
-    assert "without buttons" in server.INSTRUCTIONS
+    assert "without buttons or message_box" in server.INSTRUCTIONS
 
 
 def test_show_annotated_passes_explanation_and_buttons(viewer):
@@ -269,13 +269,19 @@ def test_show_annotated_passes_explanation_and_buttons(viewer):
         "capture_id": "c1", "html": "<div></div>", "explanation": "設定を開く",
         "buttons": [" できた ", "", "分からない"],
     })
-    assert viewer.last_extras == ("設定を開く", ["できた", "分からない"])
+    assert viewer.last_extras == ("設定を開く", ["できた", "分からない"], False)
+
+
+def test_show_annotated_passes_the_message_box_flag(viewer):
+    call("capture_monitor")
+    call("show_annotated", {"capture_id": "c1", "html": "<div></div>", "message_box": True})
+    assert viewer.last_extras == ("", [], True)
 
 
 def test_show_annotated_defaults_to_no_explanation_or_buttons(viewer):
     call("capture_monitor")
     call("show_annotated", {"capture_id": "c1", "html": "<div></div>"})
-    assert viewer.last_extras == ("", [])
+    assert viewer.last_extras == ("", [], False)
 
 
 @pytest.mark.parametrize("buttons, message", [
@@ -291,39 +297,51 @@ def test_show_annotated_rejects_bad_buttons(viewer, buttons, message):
     assert viewer.published == []
 
 
-def test_wait_for_button_returns_label_and_fresh_capture(viewer):
+def test_wait_for_message_returns_a_button_label_and_fresh_capture(viewer):
     call("capture_window", {"title": "excel"})
-    viewer.pressed = "分からない"
-    result = call("wait_for_button", {})
+    viewer.reply = {"message": "分からない", "via": "button"}
+    result = call("wait_for_message", {})
     assert not result.is_error
     image, text = result.content
     assert image.type == "image"
     meta = json.loads(text.text)
-    assert meta["pressed"] == "分からない"
+    assert (meta["message"], meta["via"]) == ("分からない", "button")
     assert meta["captureId"] == "c2"
     assert meta["source"] == "window:42 Book1 - Excel"
     assert viewer.waited == [90]
 
 
-def test_wait_for_button_timeout_returns_null(viewer):
-    result = call("wait_for_button", {"timeout_seconds": 5})
+def test_wait_for_message_returns_a_typed_message_and_fresh_capture(viewer):
+    call("capture_window", {"title": "excel"})
+    viewer.reply = {"message": "ブラー+ を引いた", "via": "text"}
+    result = call("wait_for_message", {})
+    assert not result.is_error
+    image, text = result.content
+    assert image.type == "image"
+    meta = json.loads(text.text)
+    assert (meta["message"], meta["via"]) == ("ブラー+ を引いた", "text")
+    assert meta["captureId"] == "c2"
+
+
+def test_wait_for_message_timeout_returns_null(viewer):
+    result = call("wait_for_message", {"timeout_seconds": 5})
     assert not result.is_error
     assert [c.type for c in result.content] == ["text"]
-    assert json.loads(result.content[0].text) == {"pressed": None}
+    assert json.loads(result.content[0].text) == {"message": None}
 
 
 @pytest.mark.parametrize("asked, used", [(500, 110), (0, 1), (30, 30)])
-def test_wait_for_button_clamps_the_timeout(viewer, asked, used):
-    call("wait_for_button", {"timeout_seconds": asked})
+def test_wait_for_message_clamps_the_timeout(viewer, asked, used):
+    call("wait_for_message", {"timeout_seconds": asked})
     assert viewer.waited == [used]
 
 
-def test_wait_for_button_reports_viewer_errors(viewer, monkeypatch):
+def test_wait_for_message_reports_viewer_errors(viewer, monkeypatch):
     def no_buttons(timeout):
         raise CaptureError("表示中のページにボタンがありません。")
 
-    monkeypatch.setattr(viewer, "wait_for_button", no_buttons)
-    result = call("wait_for_button", {})
+    monkeypatch.setattr(viewer, "wait_for_message", no_buttons)
+    result = call("wait_for_message", {})
     assert result.is_error
     assert "ボタンがありません" in result.content[0].text
 

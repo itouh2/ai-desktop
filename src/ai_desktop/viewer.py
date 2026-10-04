@@ -13,7 +13,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from ai_desktop.annotate import VIEWER_TITLE_PREFIX, content_security_policy, render_shell
+from ai_desktop.annotate import MAX_MESSAGE_CHARS, VIEWER_TITLE_PREFIX, content_security_policy, render_shell
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, image_to_screen
 
@@ -23,11 +23,19 @@ ACK_TIMEOUT_SECONDS = 1.5
 HEARTBEAT_SECONDS = 15.0
 SETTLE_SECONDS = 0.15  # after minimizing the browser, before the click arrives
 AFTER_CLICK_SECONDS = 0.3  # games handle a click on a later frame; keep focus and cursor until then
-MAX_BODY_BYTES = 1024
+MAX_BODY_BYTES = 16 * 1024  # fits a MAX_MESSAGE_CHARS message even with every character \u-escaped
 TOKEN_HEADER = "X-AI-Desktop-Token"
 MAX_EXPLANATION_CHARS = 4000
-NOT_WAITING_MESSAGE = "Claude が待ち受けていません。チャットで、ボタンで進めたいと頼んでください。"
+NOT_WAITING_MESSAGE = "Claude が待ち受けていません。チャットで、ページで進めたいと頼んでください。"
 UNKNOWN_BUTTON_MESSAGE = "そのボタンは今は使えません。"
+NO_MESSAGE_BOX_MESSAGE = "このページでは入力欄を使えません。"
+EMPTY_MESSAGE = "メッセージが空です。"
+LONG_MESSAGE = f"メッセージは {MAX_MESSAGE_CHARS} 文字までです。"
+
+
+def _accepts_messages(view: dict) -> bool:
+    """Whether the page offers a way to send Claude a message (buttons or the message box)."""
+    return bool(view["buttons"]) or view["messageBox"]
 
 
 def _token_matches(candidate: str, token: str) -> bool:
@@ -74,7 +82,7 @@ class Viewer:
         self._state = "idle"
         self._state_version = 1  # new tabs receive the current state right away
         self._wait_generation = 0
-        self._pressed: str | None = None
+        self._reply: dict | None = None
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -107,9 +115,18 @@ class Viewer:
     # --- showing ---------------------------------------------------------------------------
 
     def publish(
-        self, capture_id: str, html: str, title: str, explanation: str = "", buttons: list[str] | None = None
+        self,
+        capture_id: str,
+        html: str,
+        title: str,
+        explanation: str = "",
+        buttons: list[str] | None = None,
+        message_box: bool = False,
     ) -> bool:
-        """Make this the current view; True when an open tab confirmed it within the timeout."""
+        """Make this the current view; True when an open tab confirmed it within the timeout.
+
+        buttons and message_box are the page's ways of sending Claude a message: a button
+        sends its label, the message box sends what the user typed."""
         _, meta = self._store.get(capture_id)
         self.ensure_started()
         with self._changed:
@@ -124,8 +141,9 @@ class Viewer:
                 "title": title,
                 "explanation": explanation[:MAX_EXPLANATION_CHARS],
                 "buttons": list(buttons or []),
+                "messageBox": bool(message_box),
             }
-            if self._state == "waiting" and not self._view["buttons"]:
+            if self._state == "waiting" and not _accepts_messages(self._view):
                 self._wait_generation += 1  # the waiter returns None
                 self._set_state("idle")
             elif self._state in ("thinking", "error"):
@@ -143,29 +161,33 @@ class Viewer:
     def open_browser(self) -> None:
         os.startfile(self.url)
 
-    # --- page buttons ----------------------------------------------------------------------
+    # --- messages from the page ------------------------------------------------------------
 
-    def wait_for_button(self, timeout: float) -> str | None:
-        """Block until a page button is pressed; its label, or None on timeout.
+    def wait_for_message(self, timeout: float) -> dict | None:
+        """Block until the page sends Claude a message; {"message": text, "via": "button" or
+        "text"}, or None on timeout.
 
         A newer wait cancels an older one, which then returns None, so a wait left over
         from an interrupted turn cannot block the next one."""
         with self._changed:
             if self._view is None:
                 raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
-            if not self._view["buttons"]:
-                raise CaptureError("表示中のページにボタンがありません。show_annotated に buttons を付けてください。")
+            if not _accepts_messages(self._view):
+                raise CaptureError(
+                    "表示中のページに、メッセージを送る入口がありません。"
+                    "show_annotated に buttons か message_box を付けてください。"
+                )
             self._wait_generation += 1
             generation = self._wait_generation
-            self._pressed = None
+            self._reply = None
             self._set_state("waiting")
-            done = lambda: self._pressed is not None or self._wait_generation != generation  # noqa: E731
+            done = lambda: self._reply is not None or self._wait_generation != generation  # noqa: E731
             self._changed.wait_for(done, timeout=timeout)
             if self._wait_generation != generation:
                 return None
-            if self._pressed is not None:
-                label, self._pressed = self._pressed, None
-                return label
+            if self._reply is not None:
+                reply, self._reply = self._reply, None
+                return reply
             self._set_state("idle")
             return None
 
@@ -176,8 +198,26 @@ class Viewer:
                 raise CaptureError(NOT_WAITING_MESSAGE)
             if self._view is None or label not in self._view["buttons"]:
                 raise CaptureError(UNKNOWN_BUTTON_MESSAGE)
-            self._pressed = label
-            self._set_state("thinking")
+            self._answer({"message": label, "via": "button"})
+
+    def send_message(self, text: str) -> None:
+        """The user typed a message in the page's message box; wakes the waiting tool call."""
+        text = text.strip()
+        if not text:
+            raise CaptureError(EMPTY_MESSAGE)
+        if len(text) > MAX_MESSAGE_CHARS:
+            raise CaptureError(LONG_MESSAGE)
+        with self._changed:
+            if self._state != "waiting":
+                raise CaptureError(NOT_WAITING_MESSAGE)
+            if self._view is None or not self._view["messageBox"]:
+                raise CaptureError(NO_MESSAGE_BOX_MESSAGE)
+            self._answer({"message": text, "via": "text"})
+
+    def _answer(self, reply: dict) -> None:
+        """Caller holds self._changed."""
+        self._reply = reply
+        self._set_state("thinking")
 
     def recapture_current(self, recapture: Callable[[Target], Any]) -> Any:
         """Capture the target of the view on screen again (waits for a click in progress)."""
@@ -381,6 +421,17 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
                     return
                 try:
                     viewer.press(label)
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
+            elif path == "/message":
+                text = body.get("text")
+                if not isinstance(text, str):
+                    self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                    return
+                try:
+                    viewer.send_message(text)
                 except CaptureError as error:
                     self._send_json(200, {"error": str(error)})
                 else:

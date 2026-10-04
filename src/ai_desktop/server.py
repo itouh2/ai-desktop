@@ -27,11 +27,13 @@ capture returns a JPEG plus JSON metadata, where screen coordinates = origin + i
 coordinates / scale (physical pixels). To point at things on screen, call \
 show_annotated with the capture's captureId and HTML positioned in that image's pixel \
 coordinates; it shows in the user's browser, reusing the open viewer tab, and the user \
-can click on the page to click the real screen. When an interaction on that page helps \
-(guiding steps, letting the user pick an option, getting a confirmation), pass buttons \
-(and an explanation) to show_annotated and call wait_for_button; you get the pressed \
-label plus a fresh capture of the same target, so react to it and, to keep going, show \
-new buttons and wait again. If it returns {"pressed": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop using the buttons (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons so the page leaves its thinking state."""
+can click on the page to click the real screen. The page can also be a way for the \
+user to send you messages without leaving it: pass buttons (fixed replies such as \
+"done" or a choice) and/or message_box=true (free text, for when the user may need to \
+tell you something the buttons cannot, like what they see or a question), plus an \
+explanation, then call wait_for_message; you get the message (and whether it came from \
+a button or the text box) plus a fresh capture of the same target, so react to it and, \
+to keep going, show the page again and wait again. If it returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box so the page leaves its thinking state."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
@@ -150,6 +152,7 @@ def show_annotated(
     title: str | None = None,
     explanation: str | None = None,
     buttons: list[str] | None = None,
+    message_box: bool = False,
 ) -> str:
     """Show the user one of your captures with your annotations drawn on top, in their
     default browser. Use it when pointing at places on screen makes your advice clearer.
@@ -165,8 +168,10 @@ def show_annotated(
     <svg class="layer"><line class="arrow" x1=".." y1=".." x2=".." y2=".."/></svg>
     (svg.layer covers the image, in image pixels). Scripts and external resources are
     blocked. title: optional page title. explanation: optional plain text shown beside the
-    image. buttons: optional labels (up to 6, 30 chars each) shown above the image; after
-    showing them, call wait_for_button to learn which one the user pressed."""
+    image. buttons and message_box are the page's ways for the user to send you a message:
+    buttons are labels (up to 6, 30 chars each) shown above the image, each sending its own
+    label; message_box=true adds a text box (Enter sends, Shift+Enter breaks the line) for
+    free text. With either, call wait_for_message next to receive what the user sends."""
     if not html.strip():
         raise ToolError("html が空です。枠や注釈の HTML を指定してください。")
     if len(html) > MAX_HTML_CHARS:
@@ -175,7 +180,9 @@ def show_annotated(
     with _reported():
         _, meta = captures.get(capture_id)
         try:
-            delivered = viewer.publish(capture_id, html, title or meta["source"], explanation or "", labels)
+            delivered = viewer.publish(
+                capture_id, html, title or meta["source"], explanation or "", labels, message_box
+            )
         except OSError as error:
             raise ToolError(f"表示用のローカルサーバーを起動できませんでした: {error}") from error
     if delivered:
@@ -189,19 +196,21 @@ def show_annotated(
 
 
 @mcp.tool()
-def wait_for_button(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image | str]:
-    """Wait until the user presses one of the buttons on the page shown by show_annotated
-    (call it right after showing buttons). Returns {"pressed": "<label>", ...metadata} plus a
-    fresh JPEG of the same window or monitor, taken when the button was pressed. Returns
-    {"pressed": null} after timeout_seconds (1-110, default 90); then just call it again.
-    Errors if no page or no buttons are shown, or if the re-capture fails."""
+def wait_for_message(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image | str]:
+    """Wait until the user sends you a message from the page shown by show_annotated (call
+    it right after showing buttons or a message box). Returns {"message": "<text>",
+    "via": "button" | "text", ...metadata} plus a fresh JPEG of the same window or monitor,
+    taken at that moment: via "button" means the message is the label of the pressed
+    button; via "text" means the user typed it, so treat it like a chat message from them.
+    Returns {"message": null} after timeout_seconds (1-110, default 90); then just call it
+    again. Errors if no page or no way to send a message is shown, or if the re-capture fails."""
     timeout = max(1, min(WAIT_MAX_SECONDS, int(timeout_seconds)))
     with _reported():
-        label = viewer.wait_for_button(timeout)
-        if label is None:
-            return [json.dumps({"pressed": None})]
+        reply = viewer.wait_for_message(timeout)
+        if reply is None:
+            return [json.dumps({"message": None})]
         shrunk, meta = viewer.recapture_current(_recapture)
-    result = {"pressed": label, **meta}
+    result = {**reply, **meta}
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
 
 

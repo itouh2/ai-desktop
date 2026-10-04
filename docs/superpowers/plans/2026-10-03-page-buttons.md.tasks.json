@@ -4,13 +4,13 @@
     {
       "id": 0,
       "subject": "Task 1: ビューアーの状態とボタン待ち",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** ビューアーに状態（idle / waiting / thinking / error）、ボタン待ち `wait_for_button`、押下 `press`、表示中の対象の撮り直し `recapture_current`、SSE の `state` イベント、POST `/press`、表示内容の `explanation` と `buttons` を加える。\n\n**Files:**\n- Modify: `src/ai_desktop/viewer.py`（ファイル全体を置き換え）\n- Test: `tests/test_viewer.py`（ファイル全体を置き換え）\n\n**Acceptance Criteria:**\n- [ ] `publish(..., explanation, buttons)` が表示内容に `explanation`（4,000 文字で切り詰め）と `buttons` を載せる\n- [ ] 待ち受けていないときの `press` は「待ち受けていません」の `CaptureError` で、状態は `idle` のまま\n- [ ] 表示中のページがない／ボタンがないときの `wait_for_button` は待たずに `CaptureError`\n- [ ] 待ち中に表示中のボタンを押すと待ちが解除されてボタン名が返り、状態が `thinking` になる。表示中にない名前は「使えません」\n- [ ] 時間切れで `None` が返り、状態が `idle` に戻る。新しい待ちは古い待ちを `None` で終わらせる\n- [ ] 撮り直し失敗で状態が `error` になり、次の `publish` で `idle` に戻る。`recapture_current` は表示中の撮影の `Target` を渡す\n- [ ] POST `/press` は不正なトークン・Origin を 403、ボタン名が文字列でなければ 400、待ち中なら `{\"ok\": true}`\n- [ ] SSE は接続直後に `event: state`（`idle`）を送る。既存の SSE テストはイベント種別を見て `view` だけを読む\n- [ ] `uv run --no-sync pytest -q` が全件 PASS\n\n**Verify:** `uv run --no-sync pytest -q` → `86 passed`（`tests/test_viewer.py` を 5 回続けて実行しても全件 PASS）\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/viewer.py\", \"tests/test_viewer.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"mechanical\", \"acceptanceCriteria\": [\"`publish(..., explanation, buttons)` が表示内容に `explanation`（4,000 文字で切り詰め）と `buttons` を載せる\", \"待ち受けていないときの `press` は「待ち受けていません」の `CaptureError` で、状態は `idle` のまま\", \"表示中のページがない／ボタンがないときの `wait_for_button` は待たずに `CaptureError`\", \"待ち中に表示中のボタンを押すと待ちが解除されてボタン名が返り、状態が `thinking` になる。表示中にない名前は「使えません」\", \"時間切れで `None` が返り、状態が `idle` に戻る。新しい待ちは古い待ちを `None` で終わらせる\", \"撮り直し失敗で状態が `error` になり、次の `publish` で `idle` に戻る。`recapture_current` は表示中の撮影の `Target` を渡す\", \"POST `/press` は不正なトークン・Origin を 403、ボタン名が文字列でなければ 400、待ち中なら `{\\\"ok\\\": true}`\", \"SSE は接続直後に `event: state`（`idle`）を送る。既存の SSE テストはイベント種別を見て `view` だけを読む\", \"`uv run --no-sync pytest -q` が全件 PASS\"]}\n```"
     },
     {
       "id": 1,
       "subject": "Task 2: ページのボタン欄と説明欄",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** 注釈ページに、Claude のボタンを並べる上部のバー（状態の文言つき）と、画像の横の説明欄を加え、SSE の `state` に応じてボタンを有効・無効にし、押したら POST `/press` を送る。\n\n**Files:**\n- Modify: `src/ai_desktop/annotate.py`（ファイル全体を置き換え）\n- Test: `tests/test_annotate.py`（ファイル全体を置き換え）\n\n**Acceptance Criteria:**\n- [ ] シェルに `<div id=\"bar\" hidden><span id=\"buttons\"></span><span id=\"bar-state\"></span></div>` と `<aside id=\"side\" hidden></aside>` がある\n- [ ] ボタン名は `button.textContent = label;`、説明は `side.textContent = next.explanation || \"\";` で入れる（HTML として解釈しない）\n- [ ] 押すと `post(\"/press\", {button: label})` を送り、`state` イベントで表示を更新する\n- [ ] ボタンがないときはバーを、説明が空のときは説明欄を隠す。画像の拡大縮小は `#viewport` の幅を基準にする\n- [ ] CSP（`content_security_policy`）は変わらない\n- [ ] `uv run --no-sync pytest -q` が全件 PASS\n\n**Verify:** `uv run --no-sync pytest -q` → `87 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/annotate.py\", \"tests/test_annotate.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"mechanical\", \"acceptanceCriteria\": [\"シェルに `<div id=\\\"bar\\\" hidden><span id=\\\"buttons\\\"></span><span id=\\\"bar-state\\\"></span></div>` と `<aside id=\\\"side\\\" hidden></aside>` がある\", \"ボタン名は `button.textContent = label;`、説明は `side.textContent = next.explanation || \\\"\\\";` で入れる（HTML として解釈しない）\", \"押すと `post(\\\"/press\\\", {button: label})` を送り、`state` イベントで表示を更新する\", \"ボタンがないときはバーを、説明が空のときは説明欄を隠す。画像の拡大縮小は `#viewport` の幅を基準にする\", \"CSP（`content_security_policy`）は変わらない\", \"`uv run --no-sync pytest -q` が全件 PASS\"]}\n```",
       "blockedBy": [
         0
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 3: サーバーのツール（buttons・explanation・wait_for_button）",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `show_annotated` に `explanation` と `buttons` を加え、ボタン待ちツール `wait_for_button` と撮り直し関数 `_recapture` を追加し、INSTRUCTIONS に使い方を書き足す。\n\n**Files:**\n- Modify: `src/ai_desktop/server.py`（ファイル全体を置き換え）\n- Test: `tests/test_server.py`（ファイル全体を置き換え）\n\n**Acceptance Criteria:**\n- [ ] ツールが 6 つ（既存 5 つ＋`wait_for_button`）になる\n- [ ] `show_annotated` が `explanation`（省略時は空）と、空白除去・空除去したボタン名を `viewer.publish` に渡す。7 個以上・30 文字超・重複はツールエラーで、publish されない\n- [ ] `wait_for_button` が、押されたら JPEG と `pressed` 付きメタデータ（新しい `captureId`）を、時間切れなら `{\"pressed\": null}` だけを返す\n- [ ] `timeout_seconds` を 1〜110 に丸める（500→110、0→1、既定 90）\n- [ ] ビューアーの `CaptureError` はメッセージ付きのツールエラーになる\n- [ ] `_recapture(target)` が同じ対象を撮り直し、`(縮小画像, メタデータ)` を返す\n- [ ] INSTRUCTIONS が 1 段落のまま、`buttons`・`wait_for_button`・`{\"pressed\": null}` の扱いに触れている\n- [ ] `uv run --no-sync pytest -q` が全件 PASS\n\n**Verify:** `uv run --no-sync pytest -q` → `99 passed`\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/server.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"mechanical\", \"acceptanceCriteria\": [\"ツールが 6 つ（既存 5 つ＋`wait_for_button`）になる\", \"`show_annotated` が `explanation`（省略時は空）と、空白除去・空除去したボタン名を `viewer.publish` に渡す。7 個以上・30 文字超・重複はツールエラーで、publish されない\", \"`wait_for_button` が、押されたら JPEG と `pressed` 付きメタデータ（新しい `captureId`）を、時間切れなら `{\\\"pressed\\\": null}` だけを返す\", \"`timeout_seconds` を 1〜110 に丸める（500→110、0→1、既定 90）\", \"ビューアーの `CaptureError` はメッセージ付きのツールエラーになる\", \"`_recapture(target)` が同じ対象を撮り直し、`(縮小画像, メタデータ)` を返す\", \"INSTRUCTIONS が 1 段落のまま、`buttons`・`wait_for_button`・`{\\\"pressed\\\": null}` の扱いに触れている\", \"`uv run --no-sync pytest -q` が全件 PASS\"]}\n```",
       "blockedBy": [
         1
@@ -28,12 +28,12 @@
     {
       "id": 3,
       "subject": "Task 4: README と実機の通しテスト",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** README に新しい使い方と既知の制限を書き、MCP サーバー経由の通しテスト（ボタン付き表示 → `wait_for_button` → `/press` → ボタン名と撮り直し画像）を実行して、最後にユーザーに VS Code で試してもらう。\n\n**Files:**\n- Modify: `scripts/e2e_viewer.py`（ファイル全体を置き換え）\n- Modify: `README.md`\n- Modify: `docs/superpowers/specs/2026-10-03-page-buttons-design.md`（状態の表記と、実機確認の結果）\n\n**Acceptance Criteria:**\n- [ ] README のツール表に `wait_for_button` の行があり、`show_annotated` の行に `buttons` と `explanation` の説明がある。使い方の例と既知の制限 2 行が追加されている\n- [ ] `scripts/e2e_viewer.py` の出力に `timeout wait: {\"pressed\": null}`、`press: {'ok': True}`、`wait result: image 分からない`、`press while not waiting: {'error': 'Claude が待ち受けていません。…'}`、`E2E OK` が出る\n- [ ] `smoke-out/viewer-buttons-waiting.png` に、画像の上の「できた」「分からない」のボタンと、画像の右の説明文が写っている\n- [ ] ユーザーが VS Code の Claude Code で、ボタンを使ったやりとりを試して問題ないと確認する。その際、Esc で中断したあとの挙動（ページの表示、次のやりとりが詰まらないか）も確認し、仕様書 §5.2 に結果を書く\n\n**Verify:** `PYTHONIOENCODING=utf-8 uv run --no-sync python scripts/e2e_viewer.py 2>&1 | grep -v \"^INFO\\|Processing request\"` → `E2E OK`\n\n```json:metadata\n{\"files\": [\"scripts/e2e_viewer.py\", \"README.md\", \"docs/superpowers/specs/2026-10-03-page-buttons-design.md\"], \"verifyCommand\": \"PYTHONIOENCODING=utf-8 uv run --no-sync python scripts/e2e_viewer.py\", \"modelTier\": \"standard\", \"acceptanceCriteria\": [\"README のツール表に `wait_for_button` の行があり、`show_annotated` の行に `buttons` と `explanation` の説明がある。使い方の例と既知の制限 2 行が追加されている\", \"`scripts/e2e_viewer.py` の出力に `timeout wait: {\\\"pressed\\\": null}`、`press: {'ok': True}`、`wait result: image 分からない`、`press while not waiting: {'error': 'Claude が待ち受けていません。…'}`、`E2E OK` が出る\", \"`smoke-out/viewer-buttons-waiting.png` に、画像の上の「できた」「分からない」のボタンと、画像の右の説明文が写っている\", \"ユーザーが VS Code の Claude Code で、ボタンを使ったやりとりを試して問題ないと確認する。その際、Esc で中断したあとの挙動（ページの表示、次のやりとりが詰まらないか）も確認し、仕様書 §5.2 に結果を書く\"]}\n```",
       "blockedBy": [
         2
       ]
     }
   ],
-  "lastUpdated": "2026-10-03T20:03:30.622644+09:00"
+  "lastUpdated": "2026-10-03T20:17:34.531556+09:00"
 }

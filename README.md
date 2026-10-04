@@ -45,8 +45,8 @@ claude mcp list   # ai-desktop が ✓ Connected になっていれば OK
 | `list_windows` | 表示中のウィンドウ一覧（最小化中も含む。id・タイトル・アプリ・位置とサイズ・最小化中か・アクティブか） |
 | `capture_monitor` | モニター全体を撮影（省略時はプライマリ） |
 | `capture_window` | ウィンドウを撮影（`window_id` か `title` の部分一致） |
-| `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねてブラウザに表示する（撮影メタデータの `captureId` を `capture_id` に指定）。開いているタブは使い回す。ページ上のクリック・ダブルクリックは実際の画面に伝わる（ページは更新されず、注釈は残る）。`buttons`（最大6個）と `explanation` を付けると、ページにボタンと説明文が出る |
-| `wait_for_button` | ページのボタンが押されるまで待ち（1回最大110秒）、押されたボタン名と撮り直した画面を返す。時間切れなら `{"pressed": null}` |
+| `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねてブラウザに表示する（撮影メタデータの `captureId` を `capture_id` に指定）。開いているタブは使い回す。ページ上のクリック・ダブルクリックは実際の画面に伝わる（ページは更新されず、注釈は残る）。`explanation` を付けると説明文が出る。`buttons`（最大6個）や `message_box`（入力欄。Enter で送信、Shift+Enter で改行）を付けると、ページがユーザーから Claude へメッセージを届ける入口になる |
+| `wait_for_message` | ページからメッセージが届くまで待ち（1回最大110秒）、`{"message": …, "via": "button" か "text"}` と撮り直した画面を返す。時間切れなら `{"message": null}` |
 
 撮影結果は JPEG（長辺 1568px 以下）と座標メタデータです。画面座標 = `origin + 画像上の座標 ÷ scale`（物理ピクセル）。
 

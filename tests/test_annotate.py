@@ -43,9 +43,20 @@ def test_clicks_on_notes_and_badges_are_not_forwarded():
 
 def test_viewer_shell_has_button_bar_and_explanation_panel():
     page = render_shell("n0nce")
-    assert '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span></div>' in page
+    assert '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span>' in page
     assert '<aside id="side" hidden></aside>' in page
     assert "button.textContent = label;" in page
     assert 'side.textContent = next.explanation || "";' in page
     assert 'post("/press", {button: label})' in page
     assert 'events.addEventListener("state"' in page
+
+
+def test_viewer_shell_has_a_message_box_that_sends_on_enter():
+    page = render_shell("n0nce")
+    assert '<div id="compose" hidden><textarea id="message" rows="1" maxlength="1000"' in page
+    assert 'document.getElementById("compose").hidden = !messageBox;' in page
+    assert '<button id="send" type="button">送信</button>' in page
+    assert 'post("/message", {text: text})' in page
+    # Shift+Enter and the Enter that confirms an IME conversion must not send.
+    assert 'event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229' in page
+    assert "event.preventDefault();\n    sendMessage();" in page

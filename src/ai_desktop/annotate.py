@@ -31,6 +31,7 @@ _ARROWHEAD = (
 )
 
 VIEWER_TITLE_PREFIX = "ai-desktop | "
+MAX_MESSAGE_CHARS = 1000
 
 _VIEWER_CSS = """
 #stage { cursor: crosshair; }
@@ -45,11 +46,16 @@ _VIEWER_CSS = """
   font: 15px/1.7 system-ui, "Yu Gothic UI", sans-serif; white-space: pre-wrap; }
 #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px;
   background: #2a2a2a; font: 14px system-ui, "Yu Gothic UI", sans-serif; }
-#bar[hidden], #side[hidden] { display: none; }
+#bar[hidden], #side[hidden], #compose[hidden] { display: none; }
 #bar button { padding: 6px 14px; border: 0; border-radius: 6px; background: #e5484d; color: #fff;
   font: inherit; font-weight: 700; cursor: pointer; }
 #bar button:disabled { background: #555; color: #aaa; cursor: default; }
 #bar-state { margin-left: auto; color: #ccc; }
+#compose { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
+#message { flex: 1; box-sizing: border-box; min-height: 36px; max-height: 160px; padding: 6px 10px;
+  border: 1px solid #555; border-radius: 6px; background: #1e1e1e; color: #eee; resize: none;
+  font: inherit; line-height: 1.5; }
+#message:focus { outline: 2px solid #e5484d; outline-offset: -1px; }
 """
 
 # The live viewer: receives views over SSE, scales the stage, and posts clicks back.
@@ -60,10 +66,11 @@ let busy = false;
 let pending = null;
 let statusTimer = null;
 let buttonState = "idle";
+let sending = false;
 const STATE_TEXT = {
   waiting: "",
   thinking: "考え中…",
-  idle: "Claude が待ち受けると押せます",
+  idle: "Claude が待ち受けると送れます",
   error: "撮影できませんでした。チャットを確認してください",
 };
 
@@ -77,16 +84,57 @@ function fit() {
 
 function renderButtons() {
   const labels = view ? view.buttons : [];
-  document.getElementById("bar").hidden = labels.length === 0;
+  const messageBox = Boolean(view && view.messageBox);
+  document.getElementById("bar").hidden = labels.length === 0 && !messageBox;
+  document.getElementById("compose").hidden = !messageBox;
   document.getElementById("buttons").replaceChildren(...labels.map((label) => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = label;
-    button.disabled = buttonState !== "waiting";
     button.addEventListener("click", () => press(label));
     return button;
   }));
+  syncControls();
   document.getElementById("bar-state").textContent = STATE_TEXT[buttonState] || "";
+}
+
+function syncControls() {
+  const enabled = buttonState === "waiting" && !sending;
+  for (const button of document.querySelectorAll("#buttons button")) button.disabled = !enabled;
+  document.getElementById("send").disabled = !enabled;
+}
+
+function fitMessage() {
+  const input = document.getElementById("message");
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight + 2, 160) + "px";
+}
+
+async function sendMessage() {
+  const input = document.getElementById("message");
+  const text = input.value.trim();
+  if (!text || sending) return;
+  if (buttonState !== "waiting") {
+    document.getElementById("bar-state").textContent = "Claude が待ち受けると送れます";
+    return;
+  }
+  sending = true;
+  syncControls();
+  try {
+    const response = await post("/message", {text: text});
+    const result = await response.json();
+    if (result.error) {
+      document.getElementById("bar-state").textContent = result.error;
+    } else {
+      input.value = "";
+      fitMessage();
+    }
+  } catch (error) {
+    document.getElementById("bar-state").textContent = "送信できませんでした: " + error;
+  } finally {
+    sending = false;
+    syncControls();
+  }
 }
 
 async function press(label) {
@@ -161,6 +209,15 @@ async function operate(event, double) {
 }
 
 addEventListener("DOMContentLoaded", () => {
+  const input = document.getElementById("message");
+  input.addEventListener("keydown", (event) => {
+    // Enter sends, Shift+Enter breaks the line; Enter that confirms an IME conversion does neither.
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    sendMessage();
+  });
+  input.addEventListener("input", fitMessage);
+  document.getElementById("send").addEventListener("click", sendMessage);
   document.getElementById("stage").addEventListener("click", (event) => {
     clearTimeout(pending);
     if (event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")) {
@@ -212,7 +269,10 @@ def render_shell(nonce: str) -> str:
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
         '<div id="layout"><div id="main">\n'
-        '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span></div>\n'
+        '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span>'
+        f'<div id="compose" hidden><textarea id="message" rows="1" maxlength="{MAX_MESSAGE_CHARS}" '
+        'placeholder="メッセージ（Enter で送信、Shift+Enter で改行）"></textarea>'
+        '<button id="send" type="button">送信</button></div></div>\n'
         '<div id="viewport"><div id="stage">'
         '<img id="shot" alt="">'
         '<div id="annotations"></div>'

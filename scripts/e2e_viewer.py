@@ -2,8 +2,11 @@
 
 1. show_annotated opens a browser tab, and a second call reuses it.
 2. A click and a double-click sent the way the page sends them reach a real window.
-3. Page buttons: wait_for_button returns the pressed label plus a fresh capture, and
-   {"pressed": null} on timeout. A screenshot of the viewer is saved to smoke-out/.
+3. Messages from the page: wait_for_message returns a pressed button's label
+   (via "button") plus a fresh capture, and {"message": null} on timeout; a page without a
+   message box refuses typed text.
+4. A page with message_box returns typed text (via "text") plus a fresh capture.
+   Screenshots of both pages are saved to smoke-out/.
 
 Opens one browser tab and a small test window (closed at the end)."""
 
@@ -93,23 +96,43 @@ async def run(lines) -> None:
             "buttons": ["できた", "分からない"],
         })).content[0].text
         print("buttons show:", shown)
-        timed_out = await client.call_tool("wait_for_button", {"timeout_seconds": 1})
+        timed_out = await client.call_tool("wait_for_message", {"timeout_seconds": 1})
         print("timeout wait:", timed_out.content[0].text)
-        assert json.loads(timed_out.content[0].text) == {"pressed": None}
+        assert json.loads(timed_out.content[0].text) == {"message": None}
 
-        waiter = asyncio.create_task(client.call_tool("wait_for_button", {"timeout_seconds": 30}))
+        waiter = asyncio.create_task(client.call_tool("wait_for_message", {"timeout_seconds": 30}))
         await asyncio.sleep(1.5)  # the tool is now waiting
         await asyncio.to_thread(save_viewer_screenshot, "viewer-buttons-waiting.png")
+        typed = await asyncio.to_thread(post_json, url, "/message", {"text": "入力欄はないはず"})
+        print("message without a box:", typed)
+        assert "入力欄を使えません" in typed.get("error", ""), typed
         pressed = await asyncio.to_thread(post_json, url, "/press", {"button": "分からない"})
         print("press:", pressed)
         assert pressed == {"ok": True}, pressed
         result = await waiter
         answer = json.loads(result.content[1].text)
-        print("wait result:", result.content[0].type, answer["pressed"], answer["captureId"], answer["source"])
-        assert result.content[0].type == "image" and answer["pressed"] == "分からない"
+        print("wait result:", result.content[0].type, answer["message"], answer["via"], answer["captureId"])
+        assert result.content[0].type == "image" and (answer["message"], answer["via"]) == ("分からない", "button")
         again = await asyncio.to_thread(post_json, url, "/press", {"button": "できた"})
         print("press while not waiting:", again)
         assert "待ち受けていません" in again.get("error", "")
+
+        shown = (await client.call_tool("show_annotated", {
+            "capture_id": meta["captureId"], "html": box, "title": "e2e message box",
+            "explanation": "e2e: 入力欄だけのページです。", "message_box": True,
+        })).content[0].text
+        print("message box show:", shown)
+        waiter = asyncio.create_task(client.call_tool("wait_for_message", {"timeout_seconds": 30}))
+        await asyncio.sleep(1.5)
+        await asyncio.to_thread(save_viewer_screenshot, "viewer-message-box-waiting.png")
+        sent = await asyncio.to_thread(post_json, url, "/message", {"text": "e2e: 入力欄から\n2 行で送信"})
+        print("message:", sent)
+        assert sent == {"ok": True}, sent
+        result = await waiter
+        answer = json.loads(result.content[1].text)
+        print("message result:", result.content[0].type, repr(answer["message"]), answer["via"])
+        assert result.content[0].type == "image"
+        assert (answer["message"], answer["via"]) == ("e2e: 入力欄から\n2 行で送信", "text")
 
 
 def main() -> None:
