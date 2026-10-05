@@ -40,12 +40,12 @@ _VIEWER_CSS = """
   font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
 #status.show { display: block; }
 #status.error { background: #e5484d; }
-#layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
-#main { flex: 1 1 640px; min-width: 0; }
-#side { flex: 0 1 340px; box-sizing: border-box; padding: 14px 16px; color: #eee;
-  font: 15px/1.7 system-ui, "Yu Gothic UI", sans-serif; white-space: pre-wrap; }
-#bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px;
-  background: #2a2a2a; font: 14px system-ui, "Yu Gothic UI", sans-serif; }
+#layout { display: flex; flex-direction: column; }
+#viewport { margin: 0 auto; }
+#side { box-sizing: border-box; max-height: 30vh; overflow-y: auto; padding: 12px 16px; color: #eee;
+  border-top: 1px solid #333; font: 15px/1.7 system-ui, "Yu Gothic UI", sans-serif; white-space: pre-wrap; }
+#bar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 12px; background: #2a2a2a; font: 14px system-ui, "Yu Gothic UI", sans-serif; }
 #bar[hidden], #side[hidden], #compose[hidden] { display: none; }
 #bar button { padding: 6px 14px; border: 0; border-radius: 6px; background: #e5484d; color: #fff;
   font: inherit; font-weight: 700; cursor: pointer; }
@@ -76,9 +76,13 @@ const STATE_TEXT = {
 
 function fit() {
   if (!view) return;
+  // Read top to bottom: the image takes what the explanation and the reply bar below leave free.
   const viewport = document.getElementById("viewport");
-  const scale = viewport.clientWidth / view.width;
+  const below = document.getElementById("side").offsetHeight + document.getElementById("bar").offsetHeight;
+  const room = Math.max(240, innerHeight - below);
+  const scale = Math.min(document.getElementById("layout").clientWidth / view.width, room / view.height);
   document.getElementById("stage").style.transform = "scale(" + scale + ")";
+  viewport.style.width = view.width * scale + "px";
   viewport.style.height = view.height * scale + "px";
 }
 
@@ -96,6 +100,7 @@ function renderButtons() {
   }));
   syncControls();
   document.getElementById("bar-state").textContent = STATE_TEXT[buttonState] || "";
+  fit();
 }
 
 function syncControls() {
@@ -108,6 +113,7 @@ function fitMessage() {
   const input = document.getElementById("message");
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight + 2, 160) + "px";
+  fit();
 }
 
 async function sendMessage() {
@@ -268,15 +274,16 @@ def render_shell(nonce: str) -> str:
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
-        '<div id="layout"><div id="main">\n'
-        '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span>'
-        f'<div id="compose" hidden><textarea id="message" rows="1" maxlength="{MAX_MESSAGE_CHARS}" '
-        'placeholder="メッセージ（Enter で送信、Shift+Enter で改行）"></textarea>'
-        '<button id="send" type="button">送信</button></div></div>\n'
+        '<div id="layout">\n'
         '<div id="viewport"><div id="stage">'
         '<img id="shot" alt="">'
         '<div id="annotations"></div>'
         "</div></div>\n"
-        '</div><aside id="side" hidden></aside></div>\n'
+        '<aside id="side" hidden></aside>\n'
+        '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span>'
+        f'<div id="compose" hidden><textarea id="message" rows="1" maxlength="{MAX_MESSAGE_CHARS}" '
+        'placeholder="メッセージ（Enter で送信、Shift+Enter で改行）"></textarea>'
+        '<button id="send" type="button">送信</button></div></div>\n'
+        "</div>\n"
         "</body></html>\n"
     )

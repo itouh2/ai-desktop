@@ -51,6 +51,14 @@ def test_viewer_shell_has_button_bar_and_explanation_panel():
     assert 'events.addEventListener("state"' in page
 
 
+def test_viewer_shell_reads_top_to_bottom_image_explanation_then_replies():
+    page = render_shell("n0nce")
+    body = page.split("<body>")[1]
+    assert body.index('id="viewport"') < body.index('id="side"') < body.index('id="bar"')
+    # The image shrinks to leave room for the explanation and the reply bar below it.
+    assert "innerHeight" in page.split("function fit()")[1].split("}\n")[0]
+
+
 def test_viewer_shell_has_a_message_box_that_sends_on_enter():
     page = render_shell("n0nce")
     assert '<div id="compose" hidden><textarea id="message" rows="1" maxlength="1000"' in page
