@@ -581,18 +581,44 @@ def test_click_puts_the_cursor_back_when_the_recapture_fails(hand, viewer, monke
     assert viewer.recorded == ["セルを選ぶ"]
 
 
-@pytest.mark.parametrize(
-    ("app", "title"),
-    [("Code.exe", "server.py - ai-desktop - Visual Studio Code"), ("WindowsTerminal.exe", "PowerShell"),
-     ("Claude.exe", "Claude"), ("chrome.exe", "ai-desktop | e2e")],
-)
-def test_click_refuses_protected_windows(hand, viewer, monkeypatch, app, title):
-    protected = WindowInfo(id=42, title=title, app=app, x=0, y=0, width=800, height=600, minimized=False, focused=True)
-    monkeypatch.setattr(capture, "list_windows", lambda: [protected])
+def click_window_of(monkeypatch, app, title):
+    """Capture window 42 as c1 with this app and title in the window list, then try to click it."""
+    window = WindowInfo(id=42, title=title, app=app, x=0, y=0, width=800, height=600, minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [window])
     call("capture_window", {"window_id": 42})
-    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "許可を押す"})
+    return call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "許可を押す"})
+
+
+@pytest.mark.parametrize("app", sorted(server.PROTECTED_APPS))
+def test_click_refuses_protected_apps(hand, viewer, monkeypatch, app):
+    result = click_window_of(monkeypatch, app.upper(), "Claude Code")  # exe names match in any case
     assert result.is_error
     assert "Claude には押させません" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_protected_apps_cover_other_terminals_and_editors():
+    for app in ("mintty.exe", "wezterm-gui.exe", "alacritty.exe", "tabby.exe", "hyper.exe", "warp.exe",
+                "zed.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "rider64.exe", "goland64.exe",
+                "clion64.exe", "phpstorm64.exe", "rustrover64.exe"):
+        assert app in server.PROTECTED_APPS
+
+
+def test_click_refuses_the_viewer_browser(hand, viewer, monkeypatch):
+    result = click_window_of(monkeypatch, "chrome.exe", "ai-desktop | e2e")
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_refuses_a_window_whose_app_is_unknown(hand, viewer, monkeypatch):
+    result = click_window_of(monkeypatch, "", "管理者: 何かのアプリ")  # the exe lookup failed
+    assert result.is_error
+    assert result.content[0].text.removeprefix("Error executing tool click: ") == (
+        "このウィンドウのアプリを確かめられないため、Claude には押させません。ユーザーが押してください。"
+    )
     assert hand.clicks == [] and hand.moves == []
     assert ("bring_to_front", 42) not in hand.control.calls
 

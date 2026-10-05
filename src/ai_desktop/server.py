@@ -60,6 +60,9 @@ MAX_WHAT_CHARS = 60
 PROTECTED_APPS = frozenset({
     "code.exe", "code - insiders.exe", "cursor.exe", "windsurf.exe", "windowsterminal.exe",
     "openconsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "claude.exe",
+    "mintty.exe", "wezterm-gui.exe", "alacritty.exe", "tabby.exe", "hyper.exe", "warp.exe",
+    "zed.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "rider64.exe", "goland64.exe",
+    "clion64.exe", "phpstorm64.exe", "rustrover64.exe",
 })
 _sleep = time.sleep  # replaced in tests
 captures = CaptureStore()
@@ -287,11 +290,14 @@ def move_mouse(
 
 
 def _ensure_clickable(window_id: int) -> None:
-    """Raise CaptureError unless Claude may click this window: it must still exist and must not be
-    where Claude Code runs or the viewer page itself."""
+    """Raise CaptureError unless Claude may click this window: it must still exist, its app must be
+    known (an unknown one could be where Claude Code runs), and it must not be where Claude Code runs
+    or the viewer page itself."""
     window = next((w for w in capture.list_windows() if w.id == window_id), None)
     if window is None:
         raise CaptureError("対象のウィンドウが見つかりません。撮影し直してください。")
+    if not window.app:
+        raise CaptureError("このウィンドウのアプリを確かめられないため、Claude には押させません。ユーザーが押してください。")
     if window.app.lower() in PROTECTED_APPS or window.title.startswith(VIEWER_TITLE_PREFIX):
         raise CaptureError(
             f"このウィンドウ（{window.app}）は Claude には押させません。"
@@ -312,8 +318,8 @@ def click(
     on that page, and only for that window (a newer capture of the same window is fine; a monitor
     capture is not). It presses the user's real screen, so use it only for what the user asked
     you to do. It cannot right-click, double-click or drag. Windows where Claude Code runs
-    (editors, terminals, the Claude app) and the viewer browser are refused: the user presses
-    those. Put what you press in what, and after every click you must tell the user in the chat
+    (editors, terminals, the Claude app), windows whose app cannot be identified and the viewer
+    browser are refused: the user presses those. Put what you press in what, and after every click you must tell the user in the chat
     what you clicked. When the switch is off it returns an error: ask the user to click, or to
     turn it on. The clicked window stays in front. The cursor is put back afterwards.
 
