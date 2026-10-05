@@ -30,6 +30,8 @@
 3. タブを 2 つ開いていて 1 つ閉じた → オンのまま。すべて閉じた → オフ。Task 2 のテスト `test_closing_the_last_tab_turns_the_agent_off`
 4. `what` に HTML（`<img src=x onerror=...>`）が入る → ページでは文字として出る。Task 3 のテスト `test_agent_log_is_written_as_text`
 5. 押したあと撮り直しに失敗した → クリックは送られ記録にも残り、カーソルは戻る。Task 4 のテスト `test_click_puts_the_cursor_back_when_the_recapture_fails`
+6. （追加 2026-10-05）Claude が Claude Code の画面を撮って表示し、許可ダイアログを押そうとする → 守られたウィンドウとして拒否。Task 4 のテスト `test_click_refuses_protected_windows`
+7. （追加 2026-10-05）許可がオンのままモニター全体の撮影を表示した → ユーザーはチェックボックスで切れる。Task 3 のテスト `test_agent_toggle_can_always_be_switched_off`
 
 ---
 
@@ -270,7 +272,7 @@ git commit -m "feat: keep the user's click permission and Claude's click log in 
 - スクリプト: 関数 `renderAgent()` が、最後に届いた `agent` と `view` から表示を作る
   - チェックボックスの `checked` を `agent.enabled` に合わせる
   - `#agent` に `on` クラスを付け外しする。オンなら `#agent-note` に「操作を任せています」
-  - `view && view.target === "monitor"` のときはチェックボックスを `disabled` にし、`#agent-note` に「画面全体の撮影ではクリックを任せられません」
+  - `view && view.target === "monitor"` のときは `#agent-note` に「画面全体の撮影ではクリックを任せられません」。チェックボックスを `disabled` にするのは、許可がオフでモニター表示のときだけ（`checkbox.disabled = monitor && !agent.enabled;`）。許可がオンの間は、どの表示でも切れる（追加 2026-10-05）
   - 記録は `li` を作り `item.textContent = record.time + " " + record.what;`
 - チェックボックスの `change` で `post("/agent", {enabled: checkbox.checked})`。表示は SSE の state が来たときに合わせる（失敗したら `status(...)` で知らせる）
 - state のハンドラーは `buttonState` に加えて `agent` を受け取り `renderAgent()` を呼ぶ。`render(next)` の最後でも `renderAgent()` を呼ぶ
@@ -291,6 +293,11 @@ def test_agent_log_is_written_as_text():
     page = render_shell("n0nce")
     assert 'item.textContent = record.time + " " + record.what;' in page
     assert page.count(".innerHTML") == 1  # only the annotations
+
+
+def test_agent_toggle_can_always_be_switched_off():
+    page = render_shell("n0nce")
+    assert "checkbox.disabled = monitor && !agent.enabled;" in page
 
 
 def test_agent_toggle_shows_its_state_and_refuses_monitor_captures():
@@ -333,8 +340,9 @@ git commit -m "feat: add the 'let Claude operate' toggle and click log to the vi
 - Produces: MCP ツール `click(capture_id: str, x: float, y: float, what: str, wait_seconds: float = 0.5) -> list[Image | str]`。メタデータに `"clicked": {"x", "y", "captureId": <元の id>, "what"}`
 - 定数（`server.py`）: `CLICK_WAIT_DEFAULT_SECONDS = 0.5`、`CLICK_WAIT_MIN_SECONDS = 0.3`、`CLICK_WAIT_MAX_SECONDS = 5.0`、`MAX_WHAT_CHARS = 60`
 - `what` が空・60 文字超のエラー文言: `"what に、何を押すかを 1〜60 文字で書いてください。"`
+- 守られたウィンドウ（spec §2.1、追加 2026-10-05）: `PROTECTED_APPS = frozenset({"code.exe", "code - insiders.exe", "cursor.exe", "windsurf.exe", "windowsterminal.exe", "openconsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "claude.exe"})`。関数 `_ensure_clickable(window_id: int) -> None` は `capture.list_windows()` から `id` が一致する窓を探し、見つからなければ `CaptureError("対象のウィンドウが見つかりません。撮影し直してください。")`、`app.lower()` が `PROTECTED_APPS` にあるか `title` が `VIEWER_TITLE_PREFIX`（`ai_desktop.annotate`）で始まれば `CaptureError(f"このウィンドウ（{window.app}）は Claude には押させません。Claude Code が動くアプリと注釈ページは、ユーザーが押してください。")`
 
-手順（spec §5）: `what` を strip して検査 → `wait` を 0.3〜5 に丸める → `_reported()` の中で `target = captures.target(capture_id)`、`viewer.authorize_click(capture_id)` → `with pointer.at(capture_id, x, y, keep_clear="point", return_focus=False) as spot:` → その中でまず `viewer.authorize_click(capture_id)` をもう一度 → `try:` で `inputs.click(*spot.screen)`、`viewer.record_click(what)`、`_sleep(wait)`、`_recapture(target)` → `move_mouse` と同じ形でカーソルを `inputs.move(*spot.cursor)` で戻す（失敗の途中では `CaptureError` を抑えて元のエラーを投げ直す）。2 回目の確認は `try` の前なので、そこで拒否されたらカーソルは動かない。
+手順（spec §5）: `what` を strip して検査 → `wait` を 0.3〜5 に丸める → `_reported()` の中で `target = captures.target(capture_id)`、`viewer.authorize_click(capture_id)`、`_ensure_clickable(target.id)` → `with pointer.at(capture_id, x, y, keep_clear="point", return_focus=False) as spot:` → その中でまず `viewer.authorize_click(capture_id)` をもう一度 → `try:` で `inputs.click(*spot.screen)`、`viewer.record_click(what)`、`_sleep(wait)`、`_recapture(target)` → `move_mouse` と同じ形でカーソルを `inputs.move(*spot.cursor)` で戻す（失敗の途中では `CaptureError` を抑えて元のエラーを投げ直す）。2 回目の確認は `try` の前なので、そこで拒否されたらカーソルは動かない。
 
 ツールの説明文（docstring、英語。既存のツールと同じ書き方）の要点: ユーザーがページで「Claude に操作を任せる」をオンにしているときだけ、ページに表示中のウィンドウ（そのウィンドウの新しい撮影の座標でもよい）を左クリックし、待って撮り直す。右クリック・ダブルクリック・ドラッグはできない。`what` に何を押すかを書き、押したら必ずチャットにそれを書く。オフのときはエラーになるので、ユーザーに押してもらうか、オンにしてもらう。押したウィンドウは前面のまま。各引数の意味と範囲。
 
@@ -443,6 +451,31 @@ def test_click_puts_the_cursor_back_when_the_recapture_fails(hand, viewer, monke
     assert viewer.recorded == ["セルを選ぶ"]
 
 
+@pytest.mark.parametrize(
+    ("app", "title"),
+    [("Code.exe", "server.py - ai-desktop - Visual Studio Code"), ("WindowsTerminal.exe", "PowerShell"),
+     ("Claude.exe", "Claude"), ("chrome.exe", "ai-desktop | e2e")],
+)
+def test_click_refuses_protected_windows(hand, viewer, monkeypatch, app, title):
+    protected = WindowInfo(id=42, title=title, app=app, x=0, y=0, width=800, height=600, minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [protected])
+    call("capture_window", {"window_id": 42})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "許可を押す"})
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_refuses_a_window_that_is_gone(hand, viewer, monkeypatch):
+    call("capture_window", {"title": "excel"})
+    monkeypatch.setattr(capture, "list_windows", lambda: [])
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "見つかりません" in result.content[0].text
+    assert hand.clicks == []
+
+
 def test_click_leaves_the_clicked_window_in_front(hand, viewer):
     hand.control.foreground = 999
     call("capture_window", {"title": "excel"})
@@ -522,7 +555,7 @@ git commit -m "test: add an end-to-end check that click only works while the pag
 
 - `README.md`
   - ツール表に `click` の行（ページで任されたときだけ、表示中のウィンドウを左クリックし、`wait_seconds`（0.3〜5 秒、既定 0.5）待って撮り直す。`what` に何を押すかを書く。押したウィンドウは前面のまま）
-  - 既知の制限: 左クリックだけ（右クリック・ダブルクリック・ドラッグなし）。許可はページの「Claude に操作を任せる」で、タブをすべて閉じるか MCP が再起動するとオフ。押せるのはページに表示中のウィンドウだけ（画面全体の撮影では押せない）。Claude Code のツール許可で `click` を毎回確認にもできる
+  - 既知の制限: 左クリックだけ（右クリック・ダブルクリック・ドラッグなし）。許可はページの「Claude に操作を任せる」で、タブをすべて閉じるか MCP が再起動するとオフ。押せるのはページに表示中のウィンドウだけ（画面全体の撮影では押せない）。Claude Code が動くアプリ（VS Code・Cursor・Windsurf・Windows Terminal・コマンドプロンプト・PowerShell・Claude アプリ）と注釈ページのブラウザは、許可がオンでも押さない。ブラウザで動く Claude（claude.ai）や一覧にないエディターは防げない。Claude Code のツール許可で `click` を毎回確認にもできる
   - 実機の動作確認に `uv run python scripts/e2e_click.py  # click の確認（試験用ウィンドウとブラウザのタブが開きます。実行中はマウスに触らない）`
 - `SKILL.md`
   - 冒頭のツール一覧を 8 つにし、`click` を加える
