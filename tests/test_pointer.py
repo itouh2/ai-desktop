@@ -140,3 +140,20 @@ def test_no_foreground_window_means_nothing_to_give_focus_back_to(store):
     with Pointer(store, control, settle_seconds=0).at("c2", 10, 20, keep_clear="point"):
         pass
     assert not any(call[0] == "restore" for call in control.calls)
+
+
+def test_without_return_focus_the_target_stays_in_front(pointer, control):
+    control.foreground = 999
+    with pointer.at("c2", 10, 20, keep_clear="point", return_focus=False):
+        pass
+    assert ("bring_to_front", 42) in control.calls
+    assert ("restore", 999) not in control.calls
+
+
+def test_without_return_focus_a_minimized_browser_still_comes_back(pointer, control):
+    control.foreground = 999
+    control.browser_rect = (3000, 0, 3840, 1000)  # overlaps the monitor capture
+    with pointer.at("c1", 49, 98, keep_clear="capture", return_focus=False):
+        pass
+    assert control.calls[-1] == ("restore", BROWSER)
+    assert ("restore", 999) not in control.calls

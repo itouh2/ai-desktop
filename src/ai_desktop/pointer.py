@@ -37,13 +37,14 @@ class Pointer:
 
     @contextmanager
     def at(
-        self, capture_id: str, x: float, y: float, keep_clear: Literal["point", "capture"]
+        self, capture_id: str, x: float, y: float, keep_clear: Literal["point", "capture"], return_focus: bool = True
     ) -> Iterator[Spot]:
         """Get ready to operate at (x, y) of the capture and yield where that is on screen.
 
         keep_clear="point" minimizes a browser covering the point; "capture" minimizes one
         overlapping the captured area. A browser minimized here comes back afterwards and focus
-        returns to the window that had it; the cursor is left to the caller."""
+        returns to the window that had it; the cursor is left to the caller. When return_focus=False,
+        the target window keeps focus and the previous foreground window is not restored."""
         if not self.lock.acquire(blocking=False):
             raise CaptureError("ほかの操作を実行中です。終わるまで待ってください。")
         try:
@@ -77,7 +78,7 @@ class Pointer:
             finally:
                 if minimized:
                     self._control.restore(browser)
-                if previous and not (minimized and previous == browser):
+                if return_focus and previous and not (minimized and previous == browser):
                     self._control.restore(previous)
         finally:
             self.lock.release()
