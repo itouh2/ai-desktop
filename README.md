@@ -55,6 +55,7 @@ claude mcp remove ai-desktop -s user
 | `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねてブラウザに表示する（撮影メタデータの `captureId` を `capture_id` に指定）。`html` は省略でき、その場合は画像と説明文だけのページになる。開いているタブは使い回す。ページ上のクリック・ダブルクリックは実際の画面に伝わる（ページは更新されず、注釈は残る）。`explanation` を付けると説明文が出る。`buttons`（最大6個）や `message_box`（入力欄。Enter で送信、Shift+Enter で改行）を付けると、ページがユーザーから Claude へメッセージを届ける入口になる。ボタンや入力欄のあるページには『更新』が常に出る |
 | `wait_for_message` | ページからメッセージが届くまで待ち（1回最大110秒）、`{"message": …, "via": "button" か "text" か "refresh"}` と撮り直した画面を返す。時間切れなら `{"message": null}` |
 | `move_mouse` | 撮影画像の 1 点にマウスカーソルを乗せ、`wait_seconds`（0〜5 秒、既定 0.5）待ってから同じウィンドウまたはモニターを撮り直す。ツールチップや説明文など、カーソルを乗せたときだけ出る表示を読むためのもの。クリックはしない。既定でカーソルを元の位置に戻す（`restore_cursor`） |
+| `click` | ページで任されたときだけ、表示中のウィンドウを左クリックし、`wait_seconds`（0.3〜5 秒、既定 0.5）待って撮り直す。`what` に何を押すかを書く。押したウィンドウは前面のまま |
 
 撮影結果は JPEG（長辺 1568px 以下）と座標メタデータです。画面座標 = `origin + 画像上の座標 ÷ scale`（物理ピクセル）。
 
@@ -73,6 +74,7 @@ claude mcp remove ai-desktop -s user
 - ボタンや『更新』で撮り直すのは、表示中の画像と同じウィンドウまたはモニターだけです。別のウィンドウを見てほしいときはチャットで頼んでください。
 - `move_mouse` はユーザーのマウスカーソルを一時的に動かします（既定で元の位置に戻します）。操作中に使うと、操作とぶつかります。
 - ウィンドウ撮影（`capture_window`）には、そのウィンドウの外に別ウィンドウとして出るツールチップは写りません。一般的な Windows アプリのツールチップを読むときは、モニター撮影（`capture_monitor`）の画像に対して `move_mouse` を使ってください（ゲームのように画面の中に描かれる説明文は、ウィンドウ撮影でも写ります）。
+- `click` は左クリックだけ（右クリック・ダブルクリック・ドラッグなし）。許可はページの「Claude に操作を任せる」で、タブをすべて閉じるか MCP が再起動するとオフ。押せるのはページに表示中のウィンドウだけ（画面全体の撮影では押せない）。Claude Code が動くアプリ（VS Code・Cursor・Windsurf・Windows Terminal・コマンドプロンプト・PowerShell・Claude アプリ）と注釈ページのブラウザは、許可がオンでも押さない。ブラウザで動く Claude（claude.ai）や一覧にないエディターは防げない。Claude Code のツール許可で `click` を毎回確認にもできる。
 
 ## 実機の動作確認
 
@@ -81,6 +83,7 @@ uv run python scripts/smoke.py   # smoke-out/ に monitor.png と window.png を
 uv run python scripts/control_smoke.py   # クリック・前面化・最小化の確認（試験用ウィンドウが開きます）
 uv run python scripts/e2e_viewer.py      # タブの再利用とページ経由のクリックの確認（ブラウザのタブが開きます）
 uv run python scripts/e2e_move_mouse.py  # move_mouse の確認（試験用ウィンドウが開きます。実行中はマウスに触らない）
+uv run python scripts/e2e_click.py  # click の確認（試験用ウィンドウとブラウザのタブが開きます。実行中はマウスに触らない）
 ```
 
 アプリやゲームごとの知見は `notes/` にたまります（索引は [notes/README.md](notes/README.md)）。
