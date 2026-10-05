@@ -48,7 +48,7 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_seven_tools():
+def test_exposes_eight_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
@@ -56,7 +56,7 @@ def test_exposes_seven_tools():
     names = {tool.name for tool in asyncio.run(run()).tools}
     assert names == {
         "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
-        "wait_for_message", "move_mouse",
+        "wait_for_message", "move_mouse", "click",
     }
 
 
@@ -161,6 +161,10 @@ class FakeViewer:
         self.reply = None
         self.waited = []
         self.target = Target("window", 42)
+        self.allowed = True
+        self.deny_on_call = None  # deny from this authorize_click call on (1 = the first)
+        self.authorized = []
+        self.recorded = []
 
     def publish(self, capture_id, html, title, explanation="", buttons=None, message_box=False):
         if self.start_error is not None:
@@ -183,6 +187,14 @@ class FakeViewer:
 
     def focus_browser(self):
         self.focused += 1
+
+    def authorize_click(self, capture_id):
+        self.authorized.append(capture_id)
+        if not self.allowed or (self.deny_on_call is not None and len(self.authorized) >= self.deny_on_call):
+            raise CaptureError("ページで『Claude に操作を任せる』がオフです。押してほしいことをユーザーに伝えるか、オンにしてもらってください。")
+
+    def record_click(self, what):
+        self.recorded.append(what)
 
 
 @pytest.fixture
@@ -271,6 +283,7 @@ def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
     assert "move_mouse" in server.INSTRUCTIONS
+    assert "click" in server.INSTRUCTIONS and "Claude に操作を任せる" in server.INSTRUCTIONS
     assert "five nulls" in server.INSTRUCTIONS
     assert "without buttons or message_box" in server.INSTRUCTIONS
     assert "html may be omitted" in server.INSTRUCTIONS
@@ -495,3 +508,106 @@ def test_move_mouse_unknown_capture_is_reported(mouse):
     result = call("move_mouse", {"capture_id": "c9", "x": 1, "y": 1})
     assert result.is_error
     assert mouse.moves == []
+
+
+@pytest.fixture
+def hand(mouse, monkeypatch):
+    """mouse, but clicks are recorded instead of failing the test."""
+    mouse.clicks = []
+    monkeypatch.setattr(inputs, "click", lambda x, y, double=False: mouse.clicks.append((x, y, double)))
+    return mouse
+
+
+def test_click_is_refused_without_permission(hand, viewer):
+    viewer.allowed = False
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "オフです" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_left_clicks_once_waits_recaptures_and_puts_the_cursor_back(hand, viewer):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "研究卓を選ぶ"})
+    assert not result.is_error
+    meta = json.loads(result.content[1].text)
+    assert meta["captureId"] == "c2"
+    assert meta["clicked"] == {"x": 10, "y": 20, "captureId": "c1", "what": "研究卓を選ぶ"}
+    assert hand.clicks == [(110, 220, False)]
+    assert hand.sleeps == [0.5]
+    assert hand.moves == [(5, 6)]
+    assert viewer.authorized == ["c1", "c1"]
+    assert viewer.recorded == ["研究卓を選ぶ"]
+
+
+def test_click_is_refused_when_permission_ends_before_the_press(hand, viewer):
+    viewer.deny_on_call = 2
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert hand.clicks == [] and hand.moves == []
+    assert viewer.recorded == []
+
+
+@pytest.mark.parametrize("what", ["", "   ", "あ" * 61])
+def test_click_needs_a_short_what(hand, viewer, what):
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": what})
+    assert result.is_error
+    assert "1〜60 文字" in result.content[0].text
+    assert hand.clicks == []
+
+
+@pytest.mark.parametrize(("wait", "expected"), [(0, 0.3), (9, 5.0), (1.25, 1.25)])
+def test_click_clamps_the_wait(hand, viewer, wait, expected):
+    call("capture_window", {"title": "excel"})
+    call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ", "wait_seconds": wait})
+    assert hand.sleeps == [expected]
+
+
+def test_click_puts_the_cursor_back_when_the_recapture_fails(hand, viewer, monkeypatch):
+    call("capture_window", {"title": "excel"})
+
+    def gone(hwnd):
+        raise CaptureError("window_id 42 のウィンドウは存在しません。")
+
+    monkeypatch.setattr(capture, "capture_window", gone)
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert hand.clicks == [(110, 220, False)]
+    assert hand.moves == [(5, 6)]
+    assert viewer.recorded == ["セルを選ぶ"]
+
+
+@pytest.mark.parametrize(
+    ("app", "title"),
+    [("Code.exe", "server.py - ai-desktop - Visual Studio Code"), ("WindowsTerminal.exe", "PowerShell"),
+     ("Claude.exe", "Claude"), ("chrome.exe", "ai-desktop | e2e")],
+)
+def test_click_refuses_protected_windows(hand, viewer, monkeypatch, app, title):
+    protected = WindowInfo(id=42, title=title, app=app, x=0, y=0, width=800, height=600, minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [protected])
+    call("capture_window", {"window_id": 42})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "許可を押す"})
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_refuses_a_window_that_is_gone(hand, viewer, monkeypatch):
+    call("capture_window", {"title": "excel"})
+    monkeypatch.setattr(capture, "list_windows", lambda: [])
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "見つかりません" in result.content[0].text
+    assert hand.clicks == []
+
+
+def test_click_leaves_the_clicked_window_in_front(hand, viewer):
+    hand.control.foreground = 999
+    call("capture_window", {"title": "excel"})
+    call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert ("restore", 999) not in hand.control.calls

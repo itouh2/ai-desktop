@@ -16,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from ai_desktop import capture, control, inputs
-from ai_desktop.annotate import REFRESH_LABEL
+from ai_desktop.annotate import REFRESH_LABEL, VIEWER_TITLE_PREFIX
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
 from ai_desktop.pointer import Pointer
@@ -32,6 +32,10 @@ coordinates / scale (physical pixels). To read something that only appears while
 the description of an icon), call move_mouse with a capture's captureId and a point on that \
 image: it moves the user's real cursor there, waits, captures the same target again and puts \
 the cursor back, and it never clicks, so use it when the user is not using the mouse. \
+When the user has turned on "Claude に操作を任せる" on the viewer page, you may left-click \
+the window shown there with click (capture_id, x, y and a short what describing the target); \
+it clicks once, waits, captures the same window again and returns it, and after every click \
+you must tell the user in the chat what you clicked. If it is off, ask the user to click or to turn it on. \
 To point at things on screen, call \
 show_annotated with the capture's captureId and HTML positioned in that image's pixel \
 coordinates; it shows in the user's browser, reusing the open viewer tab, and the user \
@@ -47,6 +51,16 @@ mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
 MOVE_WAIT_DEFAULT_SECONDS = 0.5
 MOVE_WAIT_MAX_SECONDS = 5.0
+CLICK_WAIT_DEFAULT_SECONDS = 0.5
+CLICK_WAIT_MIN_SECONDS = 0.3
+CLICK_WAIT_MAX_SECONDS = 5.0
+MAX_WHAT_CHARS = 60
+# Apps where Claude Code itself runs (editors, terminals, the Claude app): Claude must not press
+# its own permission dialogs there, so click refuses them (the viewer browser is refused by title).
+PROTECTED_APPS = frozenset({
+    "code.exe", "code - insiders.exe", "cursor.exe", "windsurf.exe", "windowsterminal.exe",
+    "openconsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "claude.exe",
+})
 _sleep = time.sleep  # replaced in tests
 captures = CaptureStore()
 MAX_HTML_CHARS = 100_000
@@ -269,6 +283,68 @@ def move_mouse(
                 if restore_cursor:
                     inputs.move(*spot.cursor)
     result = {**meta, "hover": {"x": x, "y": y, "captureId": capture_id}, "cursorRestored": restore_cursor}
+    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
+
+
+def _ensure_clickable(window_id: int) -> None:
+    """Raise CaptureError unless Claude may click this window: it must still exist and must not be
+    where Claude Code runs or the viewer page itself."""
+    window = next((w for w in capture.list_windows() if w.id == window_id), None)
+    if window is None:
+        raise CaptureError("対象のウィンドウが見つかりません。撮影し直してください。")
+    if window.app.lower() in PROTECTED_APPS or window.title.startswith(VIEWER_TITLE_PREFIX):
+        raise CaptureError(
+            f"このウィンドウ（{window.app}）は Claude には押させません。"
+            "Claude Code が動くアプリと注釈ページは、ユーザーが押してください。"
+        )
+
+
+@mcp.tool()
+def click(
+    capture_id: str,
+    x: float,
+    y: float,
+    what: str,
+    wait_seconds: float = CLICK_WAIT_DEFAULT_SECONDS,
+) -> list[Image | str]:
+    """Left-click once on a point of the window the user's viewer page is showing, wait, and
+    capture the same window again. It works only while the user has turned on "Claude に操作を任せる"
+    on that page, and only for that window (a newer capture of the same window is fine; a monitor
+    capture is not). It presses the user's real screen, so use it only for what the user asked
+    you to do. It cannot right-click, double-click or drag. Windows where Claude Code runs
+    (editors, terminals, the Claude app) and the viewer browser are refused: the user presses
+    those. Put what you press in what, and after every click you must tell the user in the chat
+    what you clicked. When the switch is off it returns an error: ask the user to click, or to
+    turn it on. The clicked window stays in front. The cursor is put back afterwards.
+
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
+    x, y: the point in that capture's image pixels (imageWidth x imageHeight).
+    what: what you press, 1-60 characters (e.g. "OK ボタン"); it is shown to the user on the page.
+    wait_seconds: how long to wait after the click before the new capture (0.3-5, default 0.5).
+    Returns a JPEG and JSON metadata like the capture tools, with a new captureId, plus
+    "clicked" (the point, the captureId it was on, and what)."""
+    what = what.strip()
+    if not 1 <= len(what) <= MAX_WHAT_CHARS:
+        raise ToolError(f"what に、何を押すかを 1〜{MAX_WHAT_CHARS} 文字で書いてください。")
+    wait = max(CLICK_WAIT_MIN_SECONDS, min(CLICK_WAIT_MAX_SECONDS, float(wait_seconds)))
+    with _reported():
+        target = captures.target(capture_id)
+        viewer.authorize_click(capture_id)
+        _ensure_clickable(target.id)
+        with pointer.at(capture_id, x, y, keep_clear="point", return_focus=False) as spot:
+            viewer.authorize_click(capture_id)  # the user may have switched it off while we got ready
+            try:
+                inputs.click(*spot.screen)
+                viewer.record_click(what)
+                _sleep(wait)
+                shrunk, meta = _recapture(target)
+            except BaseException:
+                with contextlib.suppress(CaptureError):
+                    inputs.move(*spot.cursor)
+                raise
+            else:
+                inputs.move(*spot.cursor)
+    result = {**meta, "clicked": {"x": x, "y": y, "captureId": capture_id, "what": what}}
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
 
 
