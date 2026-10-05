@@ -1,0 +1,58 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-05-claude-click.md",
+  "specPath": "docs/superpowers/specs/2026-10-05-claude-click-design.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: Pointer.at に return_focus を足す",
+      "status": "pending",
+      "description": "**Files:**\n- Modify: `src/ai_desktop/pointer.py`（`Pointer.at`）\n- Test: `tests/test_pointer.py`\n\n**Interfaces:**\n- Produces: `Pointer.at(capture_id: str, x: float, y: float, keep_clear: Literal[\"point\", \"capture\"], return_focus: bool = True) -> Iterator[Spot]`。`return_focus=False` のとき、後片付けで操作前の前面ウィンドウを `restore` しない。このとき最小化したブラウザは今どおり `restore` する\n\nSteps: see the plan section for this task.\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/pointer.py\", \"tests/test_pointer.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"mechanical\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: ビューアーに許可と記録を持たせる",
+      "status": "pending",
+      "description": "**Files:**\n- Modify: `src/ai_desktop/viewer.py`\n- Test: `tests/test_viewer.py`\n\n**Interfaces:**\n- Consumes: `CaptureStore.target(capture_id) -> Target`（既存）\n- Produces（Task 3・4 が使う）:\n  - `Viewer.set_agent(enabled: bool) -> None`\n  - `Viewer.authorize_click(capture_id: str) -> None`（だめなら `CaptureError`）\n  - `Viewer.record_click(what: str) -> None`\n  - SSE `event: state` の data に `\"agent\": {\"enabled\": bool, \"clicks\": [{\"time\": \"HH:MM:SS\", \"what\": str}, ...]}`\n  - 表示内容（SSE `event: view`）に `\"target\": \"window\" | \"monitor\"`\n  - POST `/agent` 本文 `{\"enabled\": bool}` → `{\"ok\": true}`。`enabled` が `bool` でなければ 400\n- 定数（`viewer.py`）: `MAX_CLICK_RECORDS = 5`、`AGENT_OFF_MESSAGE`、`NO_PAGE_FOR_CLICK_MESSAGE`、`MONITOR_CLICK_MESSAGE`、`OTHER_WINDOW_MESSAGE`。文言は spec §6 の表の 1〜4 行目をそのまま使う:\n  - `AGENT_OFF_MESSAGE = \"ページで『Claude に操作を任せる』がオフです。押してほしいことをユーザーに伝えるか、オンにしてもらってください。\"`\n  - `NO_PAGE_FOR_CLICK_MESSAGE = \"表示中のページがありません。先に show_annotated で対象のウィンドウを表示してください。\"`\n  - `MONITOR_CLICK_MESSAGE = \"画面全体の撮影ではクリックできません。対象のウィンドウを capture_window で撮り、ページに表示してください。\"`\n  - `OTHER_WINDOW_MESSAGE = \"クリックできるのは、ページに表示中のウィンドウだけです。\"`\n\n判定の順（`authorize_click`）: オフ → ページなし → `capture_id` の対象がモニター → 表示中の撮影の対象と違う。状態はすべて `self._changed` の下で読み書きし、許可・記録が変わったら `_state_version` を進めて `notify_all()` する（既存の `_set_state` と同じ流れ。状態名は変えない）。接続中のタブが 0 になったら `unregister_client` で許可をオフにする。\n\nSteps: see the plan section for this task.\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/viewer.py\", \"tests/test_viewer.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: ページに「Claude に操作を任せる」欄を出す",
+      "status": "pending",
+      "description": "**Files:**\n- Modify: `src/ai_desktop/annotate.py`（`_VIEWER_CSS`、`_VIEWER_SCRIPT`、`render_shell`）\n- Test: `tests/test_annotate.py`\n\n**Interfaces:**\n- Consumes: SSE state の `agent`（`{\"enabled\", \"clicks\"}`）、view の `target`、POST `/agent {\"enabled\": bool}`（Task 2）\n- Produces: 欄の要素 `#agent`（全体）、`#agent-on`（チェックボックス）、`#agent-note`（状態の文）、`#agent-log`（記録の `ol`）\n\n決めた形:\n\n- `render_shell` で `#status` の直後に次を置く（常に出る）:\n  `<div id=\"agent\"><label><input id=\"agent-on\" type=\"checkbox\"> Claude に操作を任せる（このウィンドウだけ・左クリック）</label><div id=\"agent-note\"></div><ol id=\"agent-log\"></ol></div>`\n- CSS: `#agent` は `position: fixed; top: 12px; left: 12px; z-index: 10`、半透明の暗い背景。`#agent.on` はオレンジ（`#f5a524`）の枠と背景で目立たせる\n- スクリプト: 関数 `renderAgent()` が、最後に届いた `agent` と `view` から表示を作る\n  - チェックボックスの `checked` を `agent.enabled` に合わせる\n  - `#agent` に `on` クラスを付け外しする。オンなら `#agent-note` に「操作を任せています」\n  - `view && view.target === \"monitor\"` のときはチェックボックスを `disabled` にし、`#agent-note` に「画面全体の撮影ではクリックを任せられません」\n  - 記録は `li` を作り `item.textContent = record.time + \" \" + record.what;`\n- チェックボックスの `change` で `post(\"/agent\", {enabled: checkbox.checked})`。表示は SSE の state が来たときに合わせる（失敗したら `status(...)` で知らせる）\n- state のハンドラーは `buttonState` に加えて `agent` を受け取り `renderAgent()` を呼ぶ。`render(next)` の最後でも `renderAgent()` を呼ぶ\n- 既存の `innerHTML` は注釈の 1 か所だけのまま（記録には使わない）\n\nSteps: see the plan section for this task.\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/annotate.py\", \"tests/test_annotate.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: click ツールを加える",
+      "status": "pending",
+      "description": "**Files:**\n- Modify: `src/ai_desktop/server.py`\n- Test: `tests/test_server.py`\n\n**Interfaces:**\n- Consumes: `Viewer.authorize_click(capture_id)`、`Viewer.record_click(what)`（Task 2）。`Pointer.at(..., return_focus=False)`（Task 1）。`inputs.click(x, y, double=False)`、`inputs.move(x, y)`（既存）\n- Produces: MCP ツール `click(capture_id: str, x: float, y: float, what: str, wait_seconds: float = 0.5) -> list[Image | str]`。メタデータに `\"clicked\": {\"x\", \"y\", \"captureId\": <元の id>, \"what\"}`\n- 定数（`server.py`）: `CLICK_WAIT_DEFAULT_SECONDS = 0.5`、`CLICK_WAIT_MIN_SECONDS = 0.3`、`CLICK_WAIT_MAX_SECONDS = 5.0`、`MAX_WHAT_CHARS = 60`\n- `what` が空・60 文字超のエラー文言: `\"what に、何を押すかを 1〜60 文字で書いてください。\"`\n\n手順（spec §5）: `what` を strip して検査 → `wait` を 0.3〜5 に丸める → `_reported()` の中で `target = captures.target(capture_id)`、`viewer.authorize_click(capture_id)` → `with pointer.at(capture_id, x, y, keep_clear=\"point\", return_focus=False) as spot:` → その中でまず `viewer.authorize_click(capture_id)` をもう一度 → `try:` で `inputs.click(*spot.screen)`、`viewer.record_click(what)`、`_sleep(wait)`、`_recapture(target)` → `move_mouse` と同じ形でカーソルを `inputs.move(*spot.cursor)` で戻す（失敗の途中では `CaptureError` を抑えて元のエラーを投げ直す）。2 回目の確認は `try` の前なので、そこで拒否されたらカーソルは動かない。\n\nツールの説明文（docstring、英語。既存のツールと同じ書き方）の要点: ユーザーがページで「Claude に操作を任せる」をオンにしているときだけ、ページに表示中のウィンドウ（そのウィンドウの新しい撮影の座標でもよい）を左クリックし、待って撮り直す。右クリック・ダブルクリック・ドラッグはできない。`what` に何を押すかを書き、押したら必ずチャットにそれを書く。オフのときはエラーになるので、ユーザーに押してもらうか、オンにしてもらう。押したウィンドウは前面のまま。各引数の意味と範囲。\n\nINSTRUCTIONS: move_mouse の文の直後に次の 1 文を足す（`\\` で続け、段落を分けない）:\n\n```text\nWhen the user has turned on \"Claude に操作を任せる\" on the viewer page, you may left-click \\\nthe window shown there with click (capture_id, x, y and a short what describing the target); \\\nit clicks once, waits, captures the same window again and returns it, and after every click \\\nyou must tell the user in the chat what you clicked. If it is off, ask the user to click or to turn it on. \\\n```\n\nSteps: see the plan section for this task.\n\n```json:metadata\n{\"files\": [\"src/ai_desktop/server.py\", \"tests/test_server.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: 実機確認スクリプト",
+      "status": "pending",
+      "description": "**Files:**\n- Create: `scripts/e2e_click.py`\n\n**Interfaces:**\n- Consumes: `scripts/click_target.py`（`TITLE`、出力の JSON `{\"single\", \"double\", \"enter\", \"leave\"}`、第 1 引数の geometry）、MCP ツール `capture_window`・`show_annotated`・`click`（Task 4）、POST `/agent`（Task 2）、`ai_desktop.control.set_cursor/cursor_pos/foreground_window`、`ai_desktop.capture.list_windows/enable_dpi_awareness`\n\n流れ（`scripts/e2e_viewer.py` と `scripts/e2e_move_mouse.py` の書き方に合わせる。`post_json` は `e2e_viewer.py` から import してよい）:\n\n1. 試験用ウィンドウを `520x320+240+240` で開き、MCP サーバー（`uv run --no-sync ai-desktop`）に stdio でつなぐ\n2. `capture_window(title=TITLE)` → `show_annotated(capture_id, html=\"\", title=\"e2e click\")`。返った URL のタブが開くのを 4 秒待つ\n3. カーソルをウィンドウの外（左上から 40 px 外）に置く\n4. POST `/agent {\"enabled\": false}` → `click(capture_id, 中央, what=\"試験用ウィンドウの中央\")` → エラーで「オフです」を含むこと、`single` が増えないこと\n5. POST `/agent {\"enabled\": true}` → 同じ `click` → 成功、`single` が 1 増えること、`double` が 0 のまま、`control.foreground_window()` が試験用ウィンドウ、カーソルが 3 の位置に戻ること、メタデータの `clicked.what`\n6. POST `/agent {\"enabled\": false}`、試験用ウィンドウを閉じる（`terminate()` と `wait(timeout=5)`）。最後に `OK` を表示\n\nSteps: see the plan section for this task.\n\n```json:metadata\n{\"files\": [\"scripts/e2e_click.py\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        3
+      ]
+    },
+    {
+      "id": 5,
+      "subject": "Task 6: ドキュメントとスキル",
+      "status": "pending",
+      "description": "**Files:**\n- Modify: `README.md`\n- Modify: `.claude/skills/ai-desktop-guide/SKILL.md`\n- Modify: `.claude/skills/ai-desktop-guide/references/playbook-game.md`\n\n**Interfaces:**\n- Consumes: `click` の引数と動き（Task 4）、ページの欄（Task 3）\n\n書くこと:\n\n- `README.md`\n  - ツール表に `click` の行（ページで任されたときだけ、表示中のウィンドウを左クリックし、`wait_seconds`（0.3〜5 秒、既定 0.5）待って撮り直す。`what` に何を押すかを書く。押したウィンドウは前面のまま）\n  - 既知の制限: 左クリックだけ（右クリック・ダブルクリック・ドラッグなし）。許可はページの「Claude に操作を任せる」で、タブをすべて閉じるか MCP が再起動するとオフ。押せるのはページに表示中のウィンドウだけ（画面全体の撮影では押せない）。Claude Code のツール許可で `click` を毎回確認にもできる\n  - 実機の動作確認に `uv run python scripts/e2e_click.py  # click の確認（試験用ウィンドウとブラウザのタブが開きます。実行中はマウスに触らない）`\n- `SKILL.md`\n  - 冒頭のツール一覧を 8 つにし、`click` を加える\n  - §4 の注意「クリックはしない。押す操作が必要なら、注釈ページでユーザーに押してもらう。」を「`move_mouse` はクリックしない。押す必要があれば 4.1 節」にする\n  - 「## 4. カーソルで説明文を読む」の後ろに「### 4.1 Claude が押す（click）」を足す:\n    1. 押して確かめたいこと（物を選んで情報を読む、タブを開くなど）があり、ページに対象のウィンドウを表示しているなら、ユーザーに「ページの『Claude に操作を任せる』をオンにすると、私が押して確かめます」と一度だけ頼む\n    2. オンなら `click(capture_id, x, y, what=\"<何を押すか>\")`。`what` は押す物の名前と目的を短く（例:「左下の研究卓を選ぶ」）\n    3. 押すたびに、チャットに「押したもの」と「結果（返った画像で読めたこと）」を書く\n    4. オフのエラーなら、押してほしい場所を注釈で示してユーザーに押してもらう（前と同じやり方）\n    5. 押せるのは左クリックだけ。右クリックのメニュー、ドラッグ、文字入力は、ユーザーに頼む\n    6. 何かを決める操作（建てる、捨てる、購入、設定の保存など、元に戻しにくいもの）は、任されていても押す前にユーザーに確かめる。任されているのは、選ぶ・開く・読むための操作\n- `playbook-game.md`: 「## 3. 状態をひととおり読む」の箇条に 1 行「物や建物の正体は、クリックして情報欄で確かめる。任されていれば `click`、なければユーザーに押してもらう。見た目で決めない。」\n\nSteps: see the plan section for this task.\n\n```json:metadata\n{\"files\": [\"README.md\", \".claude/skills/ai-desktop-guide/SKILL.md\", \".claude/skills/ai-desktop-guide/references/playbook-game.md\"], \"verifyCommand\": \"uv run --no-sync pytest -q\", \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        4
+      ]
+    }
+  ],
+  "lastUpdated": "2026-10-05T21:07:18+09:00"
+}
