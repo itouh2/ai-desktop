@@ -83,4 +83,6 @@ uv run python scripts/e2e_viewer.py      # タブの再利用とページ経由�
 uv run python scripts/e2e_move_mouse.py  # move_mouse の確認（試験用ウィンドウが開きます。実行中はマウスに触らない）
 ```
 
+アプリやゲームごとの知見は `notes/` にたまります（索引は [notes/README.md](notes/README.md)）。
+
 設計の詳細は [docs/superpowers/specs/2026-10-03-desktop-vision-mcp-design.md](docs/superpowers/specs/2026-10-03-desktop-vision-mcp-design.md) を参照してください。
