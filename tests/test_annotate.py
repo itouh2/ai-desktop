@@ -105,3 +105,8 @@ def test_agent_toggle_shows_its_state_and_refuses_monitor_captures():
     assert "操作を任せています" in page
     assert 'view.target === "monitor"' in page
     assert "画面全体の撮影ではクリックを任せられません" in page
+
+
+def test_agent_toggle_can_always_be_switched_off():
+    page = render_shell("n0nce")
+    assert "checkbox.disabled = monitor && !agent.enabled;" in page

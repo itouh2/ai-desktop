@@ -117,13 +117,15 @@ function renderButtons() {
 
 // Draws the "let Claude operate" panel from the last agent state the server sent and the shown view.
 // The checkbox always follows the server's state; Claude's click records go in as text, never HTML.
+// A monitor capture cannot be handed over, but the switch only locks while the permission is off, so
+// the user can always take it back.
 function renderAgent() {
-  const refused = Boolean(view && view.target === "monitor");
+  const monitor = Boolean(view && view.target === "monitor");
   const checkbox = document.getElementById("agent-on");
   checkbox.checked = agent.enabled;
-  checkbox.disabled = refused;
+  checkbox.disabled = monitor && !agent.enabled;
   document.getElementById("agent").classList.toggle("on", agent.enabled);
-  document.getElementById("agent-note").textContent = refused
+  document.getElementById("agent-note").textContent = monitor
     ? "画面全体の撮影ではクリックを任せられません"
     : (agent.enabled ? "操作を任せています" : "");
   document.getElementById("agent-log").replaceChildren(...agent.clicks.map((record) => {
