@@ -91,7 +91,7 @@ class Viewer:
         self._version = 0
         self._acked = 0
         self._clients = 0
-        self._pointer = pointer if pointer is not None else Pointer(store, control, settle_seconds)
+        self._pointer = pointer if pointer is not None else Pointer(store, control, settle_seconds, settle_seconds)
         self._state = "idle"
         self._state_version = 1  # new tabs receive the current state right away
         self._wait_generation = 0

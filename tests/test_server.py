@@ -413,7 +413,7 @@ class Mouse:
 @pytest.fixture
 def mouse(monkeypatch):
     mouse = Mouse(FakeControl())
-    monkeypatch.setattr(server, "pointer", Pointer(server.captures, mouse.control, settle_seconds=0))
+    monkeypatch.setattr(server, "pointer", Pointer(server.captures, mouse.control, settle_seconds=0, focus_seconds=0))
     monkeypatch.setattr(inputs, "move", lambda x, y: mouse.moves.append((x, y)))
     monkeypatch.setattr(inputs, "click", lambda *args, **kwargs: pytest.fail("move_mouse must not click"))
     monkeypatch.setattr(server, "_sleep", mouse.sleeps.append)
@@ -485,7 +485,7 @@ def test_move_mouse_recapture_failure_without_restore_cursor_does_not_move_back(
 
 def test_move_mouse_gives_focus_back_without_touching_the_browser(monkeypatch):
     control = FakeControl(foreground=999)
-    monkeypatch.setattr(server, "pointer", Pointer(server.captures, control, settle_seconds=0))
+    monkeypatch.setattr(server, "pointer", Pointer(server.captures, control, settle_seconds=0, focus_seconds=0))
     monkeypatch.setattr(inputs, "move", lambda x, y: None)
     monkeypatch.setattr(server, "_sleep", lambda seconds: None)
     call("capture_window", {"title": "excel"})

@@ -24,7 +24,7 @@ def control():
 
 @pytest.fixture
 def pointer(store, control):
-    return Pointer(store, control, settle_seconds=0)
+    return Pointer(store, control, settle_seconds=0, focus_seconds=0)
 
 
 def test_window_target_is_brought_to_front_and_followed(pointer, control):
@@ -113,7 +113,7 @@ def test_only_one_operation_at_a_time(pointer):
 
 def test_focus_goes_back_to_the_window_that_had_it_and_the_browser_is_left_alone(store):
     control = FakeControl(foreground=999)
-    with Pointer(store, control, settle_seconds=0).at("c2", 10, 20, keep_clear="point"):
+    with Pointer(store, control, settle_seconds=0, focus_seconds=0).at("c2", 10, 20, keep_clear="point"):
         pass
     restores = [call for call in control.calls if call[0] == "restore"]
     assert restores == [("restore", 999)]
@@ -121,7 +121,7 @@ def test_focus_goes_back_to_the_window_that_had_it_and_the_browser_is_left_alone
 
 def test_a_browser_minimized_by_this_call_comes_back_before_focus_returns(store):
     control = FakeControl(foreground=999, browser_rect=(3000, 0, 3840, 1000))
-    with Pointer(store, control, settle_seconds=0).at("c1", 49, 98, keep_clear="capture"):
+    with Pointer(store, control, settle_seconds=0, focus_seconds=0).at("c1", 49, 98, keep_clear="capture"):
         pass
     restores = [call for call in control.calls if call[0] == "restore"]
     assert restores == [("restore", BROWSER), ("restore", 999)]
@@ -129,7 +129,7 @@ def test_a_browser_minimized_by_this_call_comes_back_before_focus_returns(store)
 
 def test_a_minimized_browser_that_was_in_front_is_restored_once(store):
     control = FakeControl(foreground=BROWSER, browser_rect=(3000, 0, 3840, 1000))
-    with Pointer(store, control, settle_seconds=0).at("c1", 49, 98, keep_clear="capture"):
+    with Pointer(store, control, settle_seconds=0, focus_seconds=0).at("c1", 49, 98, keep_clear="capture"):
         pass
     restores = [call for call in control.calls if call[0] == "restore"]
     assert restores == [("restore", BROWSER)]
@@ -137,7 +137,7 @@ def test_a_minimized_browser_that_was_in_front_is_restored_once(store):
 
 def test_no_foreground_window_means_nothing_to_give_focus_back_to(store):
     control = FakeControl(foreground=0)
-    with Pointer(store, control, settle_seconds=0).at("c2", 10, 20, keep_clear="point"):
+    with Pointer(store, control, settle_seconds=0, focus_seconds=0).at("c2", 10, 20, keep_clear="point"):
         pass
     assert not any(call[0] == "restore" for call in control.calls)
 
@@ -183,3 +183,20 @@ def test_without_return_focus_a_minimized_browser_still_comes_back(pointer, cont
         pass
     assert control.calls[-1] == ("restore", BROWSER)
     assert ("restore", 999) not in control.calls
+
+
+def test_a_window_brought_to_the_front_gets_time_to_take_focus(store, monkeypatch):
+    # Balatro dropped clicks sent 0.25 s after it got focus back (2026-10-05).
+    slept = []
+    monkeypatch.setattr("ai_desktop.pointer.time.sleep", slept.append)
+    control = FakeControl(foreground=999)
+    with Pointer(store, control, settle_seconds=0, focus_seconds=0.5).at("c2", 10, 20, keep_clear="point"):
+        assert slept == [0.5]
+
+
+def test_a_window_already_in_front_is_not_kept_waiting(store, monkeypatch):
+    slept = []
+    monkeypatch.setattr("ai_desktop.pointer.time.sleep", slept.append)
+    control = FakeControl(foreground=42)
+    with Pointer(store, control, settle_seconds=0, focus_seconds=0.5).at("c2", 10, 20, keep_clear="point"):
+        assert slept == []
