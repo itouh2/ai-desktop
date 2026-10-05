@@ -83,3 +83,25 @@ def test_viewer_shell_has_a_message_box_that_sends_on_enter():
     # Shift+Enter and the Enter that confirms an IME conversion must not send.
     assert 'event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229' in page
     assert "event.preventDefault();\n    sendMessage();" in page
+
+
+def test_page_has_the_agent_toggle():
+    page = render_shell("n0nce")
+    assert '<input id="agent-on" type="checkbox">' in page
+    assert "Claude に操作を任せる（このウィンドウだけ・左クリック）" in page
+    assert 'post("/agent", {enabled:' in page
+    assert '<ol id="agent-log"></ol>' in page
+
+
+def test_agent_log_is_written_as_text():
+    page = render_shell("n0nce")
+    assert 'item.textContent = record.time + " " + record.what;' in page
+    assert page.count(".innerHTML") == 1  # only the annotations
+
+
+def test_agent_toggle_shows_its_state_and_refuses_monitor_captures():
+    page = render_shell("n0nce")
+    assert "#agent.on" in page
+    assert "操作を任せています" in page
+    assert 'view.target === "monitor"' in page
+    assert "画面全体の撮影ではクリックを任せられません" in page

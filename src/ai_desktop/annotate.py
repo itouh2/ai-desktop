@@ -41,6 +41,14 @@ _VIEWER_CSS = """
   font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
 #status.show { display: block; }
 #status.error { background: #e5484d; }
+#agent { position: fixed; top: 12px; left: 12px; z-index: 10; box-sizing: border-box; max-width: 320px;
+  padding: 8px 12px; border: 2px solid transparent; border-radius: 6px; background: rgba(0, 0, 0, 0.78);
+  color: #fff; font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
+#agent.on { border-color: #f5a524; background: rgba(245, 165, 36, 0.92); color: #1a1a1a; }
+#agent label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#agent input:disabled { cursor: default; }
+#agent-note:empty, #agent-log:empty { display: none; }
+#agent-log { margin: 6px 0 0; padding-left: 22px; font-size: 13px; }
 #layout { display: flex; flex-direction: column; }
 #viewport { margin: 0 auto; }
 #side { box-sizing: border-box; max-height: 30vh; overflow-y: auto; padding: 12px 16px; color: #eee;
@@ -70,6 +78,7 @@ let pending = null;
 let statusTimer = null;
 let buttonState = "idle";
 let sending = false;
+let agent = {enabled: false, clicks: []};
 const STATE_TEXT = {
   waiting: "",
   thinking: "考え中…",
@@ -104,6 +113,40 @@ function renderButtons() {
   syncControls();
   document.getElementById("bar-state").textContent = STATE_TEXT[buttonState] || "";
   fit();
+}
+
+// Draws the "let Claude operate" panel from the last agent state the server sent and the shown view.
+// The checkbox always follows the server's state; Claude's click records go in as text, never HTML.
+function renderAgent() {
+  const refused = Boolean(view && view.target === "monitor");
+  const checkbox = document.getElementById("agent-on");
+  checkbox.checked = agent.enabled;
+  checkbox.disabled = refused;
+  document.getElementById("agent").classList.toggle("on", agent.enabled);
+  document.getElementById("agent-note").textContent = refused
+    ? "画面全体の撮影ではクリックを任せられません"
+    : (agent.enabled ? "操作を任せています" : "");
+  document.getElementById("agent-log").replaceChildren(...agent.clicks.map((record) => {
+    const item = document.createElement("li");
+    item.textContent = record.time + " " + record.what;
+    return item;
+  }));
+}
+
+// Asks the server to switch the permission. The page is not changed here: it follows the next state
+// event. If the request fails, the checkbox goes back to what the server last said and the reason shows.
+async function setAgent(enabled) {
+  try {
+    const response = await post("/agent", {enabled: enabled});
+    const result = await response.json();
+    if (result.error) {
+      renderAgent();
+      status(result.error, true);
+    }
+  } catch (error) {
+    renderAgent();
+    status("切り替えられませんでした: " + error, true);
+  }
 }
 
 function syncControls() {
@@ -194,6 +237,7 @@ function render(next) {
   side.textContent = next.explanation || "";
   side.hidden = !next.explanation;
   renderButtons();
+  renderAgent();
   status("", false);
   fit();
 }
@@ -241,6 +285,9 @@ addEventListener("DOMContentLoaded", () => {
   input.addEventListener("input", fitMessage);
   document.getElementById("send").addEventListener("click", sendMessage);
   document.getElementById("refresh").addEventListener("click", refresh);
+  const agentOn = document.getElementById("agent-on");
+  agentOn.addEventListener("change", () => setAgent(agentOn.checked));
+  renderAgent();
   document.getElementById("stage").addEventListener("click", (event) => {
     clearTimeout(pending);
     if (event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")) {
@@ -261,8 +308,11 @@ addEventListener("DOMContentLoaded", () => {
     post("/ack", {version: next.version});
   });
   events.addEventListener("state", (event) => {
-    buttonState = JSON.parse(event.data).state;
+    const next = JSON.parse(event.data);
+    buttonState = next.state;
+    agent = next.agent;
     renderButtons();
+    renderAgent();
   });
   events.addEventListener("error", () => {
     status("サーバーとの接続が切れました。Claude Code のセッションを確認してください。", true);
@@ -291,6 +341,9 @@ def render_shell(nonce: str) -> str:
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
+        '<div id="agent"><label><input id="agent-on" type="checkbox"> '
+        "Claude に操作を任せる（このウィンドウだけ・左クリック）</label>"
+        '<div id="agent-note"></div><ol id="agent-log"></ol></div>\n'
         '<div id="layout">\n'
         '<div id="viewport"><div id="stage">'
         '<img id="shot" alt="">'
