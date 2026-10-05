@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ai-desktop": {
+      "command": "uv",
+      "args": ["run", "--no-sync", "--directory", "C:/Works/2026/ai-desktop", "ai-desktop"]
+    }
+  }
+}

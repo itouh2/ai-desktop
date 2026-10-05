@@ -19,9 +19,16 @@ uv run pytest
 
 ## Claude Code への登録
 
+このフォルダの `.mcp.json` に登録してあります。Claude Code をこのフォルダで開くと、初回だけ使ってよいかの確認が出るので許可してください。
+
 ```powershell
-claude mcp add --scope user ai-desktop -- uv run --no-sync --directory C:/Works/2026/ai-desktop ai-desktop
-claude mcp list   # ai-desktop が ✓ Connected になっていれば OK
+claude mcp get ai-desktop   # Scope: Project config と出れば OK
+```
+
+以前ユーザー全体に登録していたら、次のコマンドで消してください（残っていると別のフォルダでも動いてしまいます）：
+
+```powershell
+claude mcp remove ai-desktop -s user
 ```
 
 `--no-sync` を付けるのは、別の Claude Code セッションの MCP サーバーが動いていても起動できるようにするためです（付けないと、起動時の同期が使用中の `ai-desktop.exe` を書き換えられずに失敗します）。依存関係を変えたときは、すべてのセッションを閉じてから `uv sync` を実行してください。
