@@ -40,7 +40,7 @@ Claude が撮影画像の 1 点を自分で左クリックし、すぐ撮り直�
 そのため `click` は、押す前に対象のウィンドウを `capture.list_windows()` で引き、次のどれかなら許可がオンでも拒否する。
 
 - 実行ファイル名（`WindowInfo.app`、大文字小文字を区別しない）が次のどれか: `code.exe`、`code - insiders.exe`、`cursor.exe`、`windsurf.exe`、`windowsterminal.exe`、`openconsole.exe`、`conhost.exe`、`cmd.exe`、`powershell.exe`、`pwsh.exe`、`claude.exe`、`mintty.exe`、`wezterm-gui.exe`、`alacritty.exe`、`tabby.exe`、`hyper.exe`、`warp.exe`、`zed.exe`、`idea64.exe`、`pycharm64.exe`、`webstorm64.exe`、`rider64.exe`、`goland64.exe`、`clion64.exe`、`phpstorm64.exe`、`rustrover64.exe`
-- 実行ファイル名を確かめられない（`WindowInfo.app` が空。管理者権限のアプリなど）。Claude Code が動くアプリかどうか分からないので、守られたものとして扱う
+- 実行ファイル名を確かめられない（`WindowInfo.app` が空。保護されたプロセスや、確かめる間に終わったプロセスなど）。Claude Code が動くアプリかどうか分からないので、守られたものとして扱う
 - タイトルが注釈ページの接頭辞 `ai-desktop | ` で始まる（注釈ページのブラウザ）
 - 一覧に見つからない（閉じた）
 
@@ -133,7 +133,7 @@ POST `/agent`（ページから）: 本文 `{"enabled": true, "target": "<target
 - オンの間は欄の色を変え（オレンジ）、「操作を任せています」と出す
 - Claude が押した記録（最大 5 件、`時刻 what`）。`textContent` で入れる（HTML として解釈しない）
 - 表示中の撮影がモニター全体のときは「画面全体の撮影ではクリックを任せられません」と出し、許可がオフならチェックボックスを使えなくする。許可がオンの間は、どの表示でもチェックボックスを使える（ユーザーがいつでも切れるように）
-- チェックボックスを変えると POST `/agent`。オンにするときは、表示中の `view.targetKey` を `target` に付ける。断られたら、チェックボックスをサーバーの状態に戻し、理由を `#status` に出す。サーバーが返す状態（SSE）で表示を合わせる（複数のタブでも同じ表示になる）
+- チェックボックスを変えると POST `/agent`。オンにするときは、まずブラウザの確認ダイアログ（`confirm()`）で確かめ、断られたら送らない（注釈 HTML の popover はトップレイヤーでチェックボックスの上に重なれるが、ブラウザのダイアログは覆えない）。オンにするときは、表示中の `view.targetKey` を `target` に付ける。断られたら、チェックボックスをサーバーの状態に戻し、理由を `#status` に出す。サーバーが返す状態（SSE）で表示を合わせる（複数のタブでも同じ表示になる）
 
 注釈 HTML（`#annotations` に `innerHTML` で入れる）から、許可のチェックボックスに手が届かないようにする（改訂: 2026-10-05 全体レビュー）。
 
@@ -215,7 +215,7 @@ click(capture_id: str, x: float, y: float, what: str, wait_seconds: float = 0.5)
   - 守られたウィンドウ（`PROTECTED_APPS` のすべてのアプリ、`ai-desktop | ` で始まるタイトル）、アプリを確かめられないウィンドウ、一覧にないウィンドウは、許可がオンでも押さない
   - 押す点に別のウィンドウが重なっていたら押さない（カーソルも動かさず、記録もしない）
   - ツールは 8 つ
-- `tests/test_annotate.py`: ページに `#agent` 欄とチェックボックスがあり、記録は `textContent` で入れ、POST `/agent` を送る（オンにするときは `targetKey` を付ける）。モニター表示でもオンの間はチェックボックスを使える。チェックボックスに `id` がなく、注釈の `label[for]` から `for` を外し、`<style>` を取り除き、`#annotations` に `isolation: isolate` がある
+- `tests/test_annotate.py`: ページに `#agent` 欄とチェックボックスがあり、記録は `textContent` で入れ、POST `/agent` を送る（オンにするときは先に `confirm()` で確かめ、`targetKey` を付ける）。モニター表示でもオンの間はチェックボックスを使える。チェックボックスに `id` がなく、注釈の `label[for]` から `for` を外し、`<style>` を取り除き、`#annotations` に `isolation: isolate` がある
 - 実機確認 `scripts/e2e_click.py`（新規）: 試験用ウィンドウ（`scripts/click_target.py`）を撮ってページに表示し、ページと同じ要求で許可をオフ・オン（`target` に `window:<id>`）にして `click` を呼ぶ。オフでは試験用ウィンドウのクリック数が増えないこと、オンでは 1 増えること、試験用ウィンドウが前面に残ること、カーソルが戻ることを確かめる
 
 検証コマンド: `uv run --no-sync pytest -q`（全件 PASS）

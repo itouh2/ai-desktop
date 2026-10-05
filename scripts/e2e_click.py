@@ -94,7 +94,7 @@ async def run(lines: queue.Queue) -> None:
             assert control.cursor_pos() == away, (control.cursor_pos(), away)
 
             await set_agent(url, False, window.id)
-            refused =await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
+            refused = await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
             text = refused.content[0].text
             state = await asyncio.to_thread(latest, lines, 1.0, before)
             print("switch off:", text, "state", state, "cursor", control.cursor_pos())
@@ -104,7 +104,7 @@ async def run(lines: queue.Queue) -> None:
             assert control.cursor_pos() == away, (control.cursor_pos(), away)
 
             await set_agent(url, True, window.id)
-            result =await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
+            result = await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
             assert not result.is_error, result.content[0].text
             assert result.content[0].type == "image", result.content[0].type
             clicked = json.loads(result.content[1].text)

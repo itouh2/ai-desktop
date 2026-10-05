@@ -86,6 +86,7 @@ let agentPanel = null;
 let agentOn = null;
 let agentNote = null;
 let agentLog = null;
+const AGENT_CONFIRM_TEXT = "このページに表示中のウィンドウを、Claude が左クリックしてよいですか？\nほかのウィンドウを表示すると、許可はオフに戻ります。いつでもオフにできます。";
 const STATE_TEXT = {
   waiting: "",
   thinking: "考え中…",
@@ -144,7 +145,13 @@ function renderAgent() {
 // Asks the server to switch the permission. The page is not changed here: it follows the next state
 // event. If the request fails, the checkbox goes back to what the server last said and the reason shows.
 // Turning it on names the target this page shows, so the server refuses it if the page has just changed.
+// It also asks in the browser's own dialog, which annotation HTML cannot cover or imitate (a popover in
+// the top layer can sit over the checkbox and turn an ordinary click into a click on it).
 async function setAgent(enabled) {
+  if (enabled && !confirm(AGENT_CONFIRM_TEXT)) {
+    renderAgent();
+    return;
+  }
   try {
     const body = enabled ? {enabled: true, target: view ? view.targetKey : ""} : {enabled: false};
     const response = await post("/agent", body);

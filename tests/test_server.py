@@ -658,5 +658,6 @@ def test_move_mouse_does_not_check_what_is_on_top(mouse):
 def test_click_leaves_the_clicked_window_in_front(hand, viewer):
     hand.control.foreground = 999
     call("capture_window", {"title": "excel"})
-    call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert not result.is_error, result.content[0].text
     assert ("restore", 999) not in hand.control.calls

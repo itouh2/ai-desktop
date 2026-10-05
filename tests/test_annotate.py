@@ -100,6 +100,17 @@ def test_turning_the_agent_on_names_the_shown_target():
     assert "{enabled: false}" in set_agent
 
 
+def test_turning_the_agent_on_asks_in_the_browsers_own_dialog():
+    page = render_shell("n0nce")
+    set_agent = page.split("async function setAgent(enabled)")[1].split("\n}\n")[0]
+    # Annotation HTML can cover the checkbox (a popover in the top layer), but not a native dialog.
+    assert "if (enabled && !confirm(AGENT_CONFIRM_TEXT)) {" in set_agent
+    assert set_agent.index("confirm(") < set_agent.index('post("/agent"')
+    declined = set_agent.split("!confirm(AGENT_CONFIRM_TEXT)) {")[1].split("}")[0]
+    assert "renderAgent();" in declined and "return;" in declined
+    assert "Claude が左クリックしてよいですか" in page
+
+
 def test_agent_checkbox_has_no_id_a_label_could_target():
     page = render_shell("n0nce")
     assert 'id="agent-on"' not in page
