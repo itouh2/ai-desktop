@@ -40,7 +40,7 @@ user to send you messages without leaving it: pass buttons (fixed replies such a
 tell you something the buttons cannot, like what they see or a question), plus an \
 explanation, then call wait_for_message; you get the message (and whether it came from \
 a button or the text box) plus a fresh capture of the same target, so react to it and, \
-to keep going, show the page again and wait again. If it returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box so the page leaves its thinking state."""
+to keep going, show the page again and wait again. If it returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box (html may be omitted) so the page leaves its thinking state."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
@@ -159,7 +159,7 @@ def capture_window(window_id: int | None = None, title: str | None = None) -> li
 @mcp.tool(structured_output=False)
 def show_annotated(
     capture_id: str,
-    html: str,
+    html: str = "",
     title: str | None = None,
     explanation: str | None = None,
     buttons: list[str] | None = None,
@@ -171,20 +171,19 @@ def show_annotated(
     the real screen at that spot; the page itself is not refreshed (annotations stay),
     so capture again to see the result.
 
-    capture_id: the captureId from a capture's metadata (the latest 10 are kept).
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
     html: elements positioned absolutely with style left/top in that capture's image
     pixels (imageWidth x imageHeight, i.e. the image you saw). Helper classes:
     .box (outline; left/top/width/height), .badge (numbered circle; left/top is its
     center), .note (callout; left/top is its top-left corner), and for arrows
     <svg class="layer"><line class="arrow" x1=".." y1=".." x2=".." y2=".."/></svg>
     (svg.layer covers the image, in image pixels). Scripts and external resources are
-    blocked. title: optional page title. explanation: optional plain text shown beside the
+    blocked. Omit it (or pass "") for a page with no annotations, e.g. to end a conversation on the page.
+    title: optional page title. explanation: optional plain text shown beside the
     image. buttons and message_box are the page's ways for the user to send you a message:
     buttons are labels (up to 6, 30 chars each) shown above the image, each sending its own
     label; message_box=true adds a text box (Enter sends, Shift+Enter breaks the line) for
     free text. With either, call wait_for_message next to receive what the user sends."""
-    if not html.strip():
-        raise ToolError("html が空です。枠や注釈の HTML を指定してください。")
     if len(html) > MAX_HTML_CHARS:
         raise ToolError(f"html が長すぎます（{len(html)} 文字）。{MAX_HTML_CHARS} 文字以内にしてください。")
     labels = _clean_buttons(buttons)
@@ -240,7 +239,7 @@ def move_mouse(
     moment and put back, and focus returns to the window that had it. It moves the user's real
     cursor for a moment, so use it when the user is not using the mouse.
 
-    capture_id: the captureId from a capture's metadata (the latest 10 are kept).
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
     x, y: the point in that capture's image pixels (imageWidth x imageHeight).
     wait_seconds: how long the cursor rests before the capture (0-5, default 0.5).
     restore_cursor: put the cursor back where it was afterwards (default true).

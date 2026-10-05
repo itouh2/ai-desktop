@@ -9,7 +9,7 @@ from typing import Literal
 
 from ai_desktop.imaging import CaptureError
 
-CAPTURE_LIMIT = 10
+CAPTURE_LIMIT = 20
 
 
 @dataclass(frozen=True)

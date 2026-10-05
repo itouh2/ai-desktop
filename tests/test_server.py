@@ -218,13 +218,22 @@ def test_show_annotated_unknown_capture_is_reported(viewer):
     assert viewer.published == []
 
 
-@pytest.mark.parametrize("html", ["", "   "])
-def test_show_annotated_rejects_empty_html(viewer, html):
+@pytest.mark.parametrize("arguments", [{"html": ""}, {"html": "   "}, {}])
+def test_show_annotated_accepts_empty_or_missing_html(viewer, arguments):
     call("capture_monitor")
-    result = call("show_annotated", {"capture_id": "c1", "html": html})
-    assert result.is_error
-    assert "html が空です" in result.content[0].text
-    assert viewer.published == []
+    result = call("show_annotated", {"capture_id": "c1", **arguments})
+    assert not result.is_error
+    assert [html for _, html, _ in viewer.published] == [arguments.get("html", "")]
+
+
+def test_tool_descriptions_say_20_captures_are_kept():
+    async def run():
+        async with Client(server.mcp) as client:
+            return await client.list_tools()
+
+    descriptions = {tool.name: tool.description for tool in asyncio.run(run()).tools}
+    for name in ("show_annotated", "move_mouse"):
+        assert "the latest 20 are kept" in descriptions[name]
 
 
 @pytest.mark.parametrize("length, expected_error", [(100_000, False), (100_001, True)])
@@ -264,6 +273,7 @@ def test_instructions_are_one_paragraph():
     assert "move_mouse" in server.INSTRUCTIONS
     assert "five nulls" in server.INSTRUCTIONS
     assert "without buttons or message_box" in server.INSTRUCTIONS
+    assert "html may be omitted" in server.INSTRUCTIONS
 
 
 def test_show_annotated_passes_explanation_and_buttons(viewer):
