@@ -3,7 +3,7 @@ from fakes import BROWSER, FakeControl
 
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta
-from ai_desktop.pointer import Pointer, Spot
+from ai_desktop.pointer import COVERED_MESSAGE, Pointer, Spot
 
 MONITOR_META = build_meta("monitor:1 DISPLAY1", 0, 0, (3200, 1600), (1568, 784), 0.49)
 WINDOW_META = build_meta("window:42 Book1 - Excel", -100, 50, (800, 600), (800, 600), 1.0)
@@ -148,6 +148,32 @@ def test_without_return_focus_the_target_stays_in_front(pointer, control):
         pass
     assert ("bring_to_front", 42) in control.calls
     assert ("restore", 999) not in control.calls
+
+
+def test_must_hit_target_refuses_a_point_covered_by_another_window(pointer, control):
+    control.covered_by = 555  # e.g. an always-on-top window over the target
+    with pytest.raises(CaptureError) as refused:
+        with pointer.at("c2", 10, 20, keep_clear="point", must_hit_target=True):
+            pytest.fail("the body must not run")
+    assert str(refused.value) == COVERED_MESSAGE
+    assert ("window_at", 110, 220) in control.calls
+    assert control.calls[-1] == ("restore", BROWSER)
+    assert pointer.lock.acquire(blocking=False)
+    pointer.lock.release()
+
+
+def test_must_hit_target_passes_when_the_target_is_under_the_point(pointer, control):
+    with pointer.at("c2", 10, 20, keep_clear="point", must_hit_target=True) as spot:
+        assert spot.screen == (110, 220)
+    calls = control.calls
+    assert calls.index(("bring_to_front", 42)) < calls.index(("window_at", 110, 220))
+
+
+def test_must_hit_target_is_ignored_for_monitor_targets(pointer, control):
+    control.browser_rect = (3840, 0, 7680, 2160)
+    with pointer.at("c1", 49, 98, keep_clear="point", must_hit_target=True) as spot:
+        assert spot.screen == (100, 200)
+    assert not any(call[0] == "window_at" for call in control.calls)
 
 
 def test_without_return_focus_a_minimized_browser_still_comes_back(pointer, control):

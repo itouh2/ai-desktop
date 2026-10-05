@@ -606,6 +606,25 @@ def test_click_refuses_a_window_that_is_gone(hand, viewer, monkeypatch):
     assert hand.clicks == []
 
 
+def test_click_refuses_when_another_window_covers_the_point(hand, viewer):
+    hand.control.covered_by = 555
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "別のウィンドウの下" in result.content[0].text
+    assert ("window_at", 110, 220) in hand.control.calls
+    assert hand.clicks == [] and hand.moves == []
+    assert viewer.recorded == []
+
+
+def test_move_mouse_does_not_check_what_is_on_top(mouse):
+    mouse.control.covered_by = 555
+    call("capture_window", {"title": "excel"})
+    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
+    assert not result.is_error
+    assert not any(call[0] == "window_at" for call in mouse.control.calls)
+
+
 def test_click_leaves_the_clicked_window_in_front(hand, viewer):
     hand.control.foreground = 999
     call("capture_window", {"title": "excel"})

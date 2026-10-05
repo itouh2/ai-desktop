@@ -21,6 +21,11 @@ _user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 _user32.SetCursorPos.restype = wintypes.BOOL
 _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
+_user32.WindowFromPoint.argtypes = [wintypes.POINT]
+_user32.WindowFromPoint.restype = wintypes.HWND
+_user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+_user32.GetAncestor.restype = wintypes.HWND
+GA_ROOT = 2
 
 
 def find_window(title_fragment: str) -> int | None:
@@ -44,6 +49,14 @@ def window_origin(hwnd: int) -> tuple[int, int]:
     except (pywintypes.error, TypeError, OverflowError) as error:
         raise CaptureError("操作対象のウィンドウが見つかりません。撮影し直してください。") from error
     return left, top
+
+
+def window_at(x: int, y: int) -> int | None:
+    """The top-level window at the physical screen point (the one a click there reaches), if any."""
+    hwnd = _user32.WindowFromPoint(wintypes.POINT(x, y))
+    if not hwnd:
+        return None
+    return _user32.GetAncestor(hwnd, GA_ROOT) or None
 
 
 def window_rect(hwnd: int) -> tuple[int, int, int, int]:

@@ -331,7 +331,7 @@ def click(
         target = captures.target(capture_id)
         viewer.authorize_click(capture_id)
         _ensure_clickable(target.id)
-        with pointer.at(capture_id, x, y, keep_clear="point", return_focus=False) as spot:
+        with pointer.at(capture_id, x, y, keep_clear="point", return_focus=False, must_hit_target=True) as spot:
             viewer.authorize_click(capture_id)  # the user may have switched it off while we got ready
             try:
                 inputs.click(*spot.screen)
