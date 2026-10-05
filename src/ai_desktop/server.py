@@ -317,12 +317,13 @@ def click(
     capture the same window again. It works only while the user has turned on "Claude に操作を任せる"
     on that page, and only for that window (a newer capture of the same window is fine; a monitor
     capture is not). Showing a different window or a monitor on the page turns the switch off, so
-    the user has to turn it on again for the new window. It presses the user's real screen, so use it only for what the user asked
-    you to do. It cannot right-click, double-click or drag. Windows where Claude Code runs
-    (editors, terminals, the Claude app), windows whose app cannot be identified and the viewer
-    browser are refused: the user presses those. Put what you press in what, and after every click you must tell the user in the chat
-    what you clicked. When the switch is off it returns an error: ask the user to click, or to
-    turn it on. The clicked window stays in front. The cursor is put back afterwards.
+    the user has to turn it on again for the new window. It presses the user's real screen, so use
+    it only for what the user asked you to do. It cannot right-click, double-click or drag. Windows
+    where Claude Code runs (editors, terminals, the Claude app), windows whose app cannot be
+    identified and the viewer browser are refused: the user presses those. Put what you press in
+    what, and after every click you must tell the user in the chat what you clicked. When the
+    switch is off it returns an error: ask the user to click, or to turn it on. The clicked window
+    stays in front. The cursor is put back afterwards.
 
     capture_id: the captureId from a capture's metadata (the latest 20 are kept).
     x, y: the point in that capture's image pixels (imageWidth x imageHeight).
