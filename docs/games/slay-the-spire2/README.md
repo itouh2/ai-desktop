@@ -10,6 +10,7 @@
 
 - 盗賊系（毒とナイフ）: この README の第 1〜5 節。
 - ネクロバインダー（破滅とオスティ）: [necrobinder.md](necrobinder.md)
+- ★（星）を使うキャラ: [regent.md](regent.md)
 
 ---
 
