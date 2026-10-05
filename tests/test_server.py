@@ -48,7 +48,7 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_eight_tools():
+def test_exposes_nine_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
@@ -56,7 +56,7 @@ def test_exposes_eight_tools():
     names = {tool.name for tool in asyncio.run(run()).tools}
     assert names == {
         "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
-        "wait_for_message", "move_mouse", "click",
+        "wait_for_message", "move_mouse", "click", "drag",
     }
 
 
@@ -416,6 +416,7 @@ def mouse(monkeypatch):
     monkeypatch.setattr(server, "pointer", Pointer(server.captures, mouse.control, settle_seconds=0, focus_seconds=0))
     monkeypatch.setattr(inputs, "move", lambda x, y: mouse.moves.append((x, y)))
     monkeypatch.setattr(inputs, "click", lambda *args, **kwargs: pytest.fail("move_mouse must not click"))
+    monkeypatch.setattr(inputs, "drag", lambda *args, **kwargs: pytest.fail("only drag may drag"))
     monkeypatch.setattr(server, "_sleep", mouse.sleeps.append)
     return mouse
 
@@ -661,3 +662,122 @@ def test_click_leaves_the_clicked_window_in_front(hand, viewer):
     result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
     assert not result.is_error, result.content[0].text
     assert ("restore", 999) not in hand.control.calls
+
+
+@pytest.fixture
+def grip(hand, monkeypatch):
+    """hand, but drags are recorded too."""
+    hand.drags = []
+    monkeypatch.setattr(inputs, "drag", lambda start, end: hand.drags.append((start, end)))
+    return hand
+
+
+DRAG = {"capture_id": "c1", "from_x": 10, "from_y": 20, "to_x": 30, "to_y": 40, "what": "ジョーカーを右へ"}
+
+
+def test_drag_is_refused_without_permission(grip, viewer):
+    viewer.allowed = False
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert "オフです" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+    assert ("bring_to_front", 42) not in grip.control.calls
+
+
+def test_drag_drags_waits_recaptures_and_puts_the_cursor_back(grip, viewer):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = call("drag", DRAG)
+    assert not result.is_error, result.content[0].text
+    meta = json.loads(result.content[1].text)
+    assert meta["captureId"] == "c2"
+    assert meta["dragged"] == {
+        "fromX": 10, "fromY": 20, "toX": 30, "toY": 40, "captureId": "c1", "what": "ジョーカーを右へ",
+    }
+    assert grip.drags == [((110, 220), (130, 240))]
+    assert grip.clicks == []
+    assert grip.sleeps == [0.5]
+    assert grip.moves == [(5, 6)]
+    assert viewer.authorized == ["c1", "c1"]
+    assert viewer.recorded == ["ジョーカーを右へ（ドラッグ）"]
+    assert ("window_at", 110, 220) in grip.control.calls
+    assert ("window_at", 130, 240) in grip.control.calls
+
+
+def test_drag_is_refused_when_permission_ends_before_the_press(grip, viewer):
+    viewer.deny_on_call = 2
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert grip.drags == [] and grip.moves == []
+    assert viewer.recorded == []
+
+
+@pytest.mark.parametrize("what", ["", "   ", "あ" * 61])
+def test_drag_needs_a_short_what(grip, viewer, what):
+    call("capture_window", {"title": "excel"})
+    result = call("drag", {**DRAG, "what": what})
+    assert result.is_error
+    assert "1〜60 文字" in result.content[0].text
+    assert grip.drags == []
+
+
+@pytest.mark.parametrize(("wait", "expected"), [(0, 0.3), (9, 5.0), (1.25, 1.25)])
+def test_drag_clamps_the_wait(grip, viewer, wait, expected):
+    call("capture_window", {"title": "excel"})
+    call("drag", {**DRAG, "wait_seconds": wait})
+    assert grip.sleeps == [expected]
+
+
+def test_drag_refuses_an_end_point_outside_the_image(grip, viewer):
+    call("capture_window", {"title": "excel"})
+    result = call("drag", {**DRAG, "to_x": 800})
+    assert result.is_error
+    assert "画像の外" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+
+
+def test_drag_refuses_when_another_window_covers_the_end_point(grip, viewer):
+    grip.control.covered_at = {(130, 240): 555}
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert "別のウィンドウの下" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+    assert viewer.recorded == []
+
+
+def test_drag_says_it_was_sent_when_the_recapture_fails(grip, viewer, monkeypatch):
+    call("capture_window", {"title": "excel"})
+
+    def gone(hwnd):
+        raise CaptureError("window_id 42 のウィンドウは存在しません。")
+
+    monkeypatch.setattr(capture, "capture_window", gone)
+    result = call("drag", DRAG)
+    assert result.is_error
+    message = result.content[0].text.removeprefix("Error executing tool drag: ")
+    assert message.startswith("ドラッグは送りました（ジョーカーを右へ）。撮り直しに失敗しました: ")
+    assert "もう一度動かさずに" in message
+    assert grip.drags == [((110, 220), (130, 240))]
+    assert grip.moves == [(5, 6)]
+
+
+def test_drag_refuses_protected_apps(grip, viewer, monkeypatch):
+    window = WindowInfo(id=42, title="Claude Code", app="Code.exe", x=0, y=0, width=800, height=600,
+                        minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [window])
+    call("capture_window", {"window_id": 42})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+    assert ("bring_to_front", 42) not in grip.control.calls
+
+
+def test_drag_leaves_the_window_in_front(grip, viewer):
+    grip.control.foreground = 999
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert not result.is_error, result.content[0].text
+    assert ("restore", 999) not in grip.control.calls

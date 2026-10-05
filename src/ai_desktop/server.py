@@ -7,7 +7,7 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 
@@ -19,7 +19,7 @@ from ai_desktop import capture, control, inputs
 from ai_desktop.annotate import REFRESH_LABEL, VIEWER_TITLE_PREFIX
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
-from ai_desktop.pointer import Pointer
+from ai_desktop.pointer import Pointer, Spot
 from ai_desktop.viewer import Viewer
 
 INSTRUCTIONS = """\
@@ -35,7 +35,7 @@ the cursor back, and it never clicks, so use it when the user is not using the m
 When the user has turned on "Claude に操作を任せる" on the viewer page, you may left-click \
 the window shown there with click (capture_id, x, y and a short what describing the target); \
 it clicks once, waits, captures the same window again and returns it, and after every click \
-you must tell the user in the chat what you clicked. If it is off, ask the user to click or to turn it on. \
+you must tell the user in the chat what you clicked. If it is off, ask the user to click or to turn it on. With the same permission, drag (capture_id, from_x, from_y, to_x, to_y and what) presses on one point, moves to the other and releases there, for things a hand would drag (a card, a box selection, a zone); tell the user in the chat what you dragged as well. \
 To point at things on screen, call \
 show_annotated with the capture's captureId and HTML positioned in that image's pixel \
 coordinates; it shows in the user's browser, reusing the open viewer tab, and the user \
@@ -318,12 +318,12 @@ def click(
     on that page, and only for that window (a newer capture of the same window is fine; a monitor
     capture is not). Showing a different window or a monitor on the page turns the switch off, so
     the user has to turn it on again for the new window. It presses the user's real screen, so use
-    it only for what the user asked you to do. It cannot right-click, double-click or drag. Windows
-    where Claude Code runs (editors, terminals, the Claude app), windows whose app cannot be
-    identified and the viewer browser are refused: the user presses those. Put what you press in
-    what, and after every click you must tell the user in the chat what you clicked. When the
-    switch is off it returns an error: ask the user to click, or to turn it on. The clicked window
-    stays in front. The cursor is put back afterwards.
+    it only for what the user asked you to do. It cannot right-click or double-click; to drag, use
+    drag. Windows where Claude Code runs (editors, terminals, the Claude app), windows whose app
+    cannot be identified and the viewer browser are refused: the user presses those. Put what you
+    press in what, and after every click you must tell the user in the chat what you clicked. When
+    the switch is off it returns an error: ask the user to click, or to turn it on. The clicked
+    window stays in front. The cursor is put back afterwards.
 
     capture_id: the captureId from a capture's metadata (the latest 20 are kept).
     x, y: the point in that capture's image pixels (imageWidth x imageHeight).
@@ -331,27 +331,90 @@ def click(
     wait_seconds: how long to wait after the click before the new capture (0.3-5, default 0.5).
     Returns a JPEG and JSON metadata like the capture tools, with a new captureId, plus
     "clicked" (the point, the captureId it was on, and what)."""
+    what = _short_what(what)
+    shrunk, meta = _operate(
+        capture_id, (x, y), None, lambda spot: inputs.click(*spot.screen), wait_seconds,
+        recorded=what, sent=f"クリックは送りました（{what}）", again="もう一度押さずに",
+    )
+    result = {**meta, "clicked": {"x": x, "y": y, "captureId": capture_id, "what": what}}
+    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
+
+
+@mcp.tool()
+def drag(
+    capture_id: str,
+    from_x: float,
+    from_y: float,
+    to_x: float,
+    to_y: float,
+    what: str,
+    wait_seconds: float = CLICK_WAIT_DEFAULT_SECONDS,
+) -> list[Image | str]:
+    """Left-drag from one point to another on the window the user's viewer page is showing (press
+    on the first point, move to the second in small steps, release there), wait, and capture the
+    same window again. Use it to move things a hand would drag: a card or an item to another place,
+    a box selection, a zone drawn on a map. It needs the same permission as click ("Claude に操作を任せる"
+    on the page, for that window only) and refuses the same windows; both points must be on that
+    window and not under another one, or nothing is pressed. Put what you drag and where in what,
+    and after every drag you must tell the user in the chat what you dragged. The window stays in
+    front. The cursor is put back afterwards.
+
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
+    from_x, from_y: where the drag starts, in that capture's image pixels.
+    to_x, to_y: where it ends, in the same image's pixels.
+    what: what you drag and where, 1-60 characters (e.g. "左のジョーカーを右端へ"); it is shown on the page.
+    wait_seconds: how long to wait after the release before the new capture (0.3-5, default 0.5).
+    Returns a JPEG and JSON metadata like the capture tools, with a new captureId, plus
+    "dragged" (fromX, fromY, toX, toY, the captureId they were on, and what)."""
+    what = _short_what(what)
+    shrunk, meta = _operate(
+        capture_id, (from_x, from_y), (to_x, to_y), lambda spot: inputs.drag(spot.screen, spot.end),
+        wait_seconds, recorded=f"{what}（ドラッグ）", sent=f"ドラッグは送りました（{what}）",
+        again="もう一度動かさずに",
+    )
+    dragged = {"fromX": from_x, "fromY": from_y, "toX": to_x, "toY": to_y, "captureId": capture_id, "what": what}
+    result = {**meta, "dragged": dragged}
+    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
+
+
+def _short_what(what: str) -> str:
     what = what.strip()
     if not 1 <= len(what) <= MAX_WHAT_CHARS:
         raise ToolError(f"what に、何を押すかを 1〜{MAX_WHAT_CHARS} 文字で書いてください。")
+    return what
+
+
+def _operate(
+    capture_id: str,
+    point: tuple[float, float],
+    to: tuple[float, float] | None,
+    press: Callable[[Spot], None],
+    wait_seconds: float,
+    recorded: str,
+    sent: str,
+    again: str,
+) -> tuple[PILImage.Image, dict]:
+    """What click and drag share: check the permission and the window, press, log it on the page,
+    wait, capture the same window again and put the cursor back. sent and again make the error for
+    a recapture that fails after the input went out, so Claude does not press a second time."""
     wait = max(CLICK_WAIT_MIN_SECONDS, min(CLICK_WAIT_MAX_SECONDS, float(wait_seconds)))
     with _reported():
         target = captures.target(capture_id)
         viewer.authorize_click(capture_id)
         _ensure_clickable(target.id)
-        with pointer.at(capture_id, x, y, keep_clear="point", return_focus=False, must_hit_target=True) as spot:
+        with pointer.at(
+            capture_id, *point, keep_clear="point", return_focus=False, must_hit_target=True, to=to
+        ) as spot:
             viewer.authorize_click(capture_id)  # the user may have switched it off while we got ready
             try:
-                inputs.click(*spot.screen)
-                viewer.record_click(what)
+                press(spot)
+                viewer.record_click(recorded)
                 _sleep(wait)
                 try:
-                    shrunk, meta = _recapture(target)
+                    return_value = _recapture(target)
                 except CaptureError as error:
-                    # The click went out; say so, or Claude may press again to "retry".
                     raise CaptureError(
-                        f"クリックは送りました（{what}）。撮り直しに失敗しました: {error} "
-                        "もう一度押さずに、撮影し直して確かめてください。"
+                        f"{sent}。撮り直しに失敗しました: {error} {again}、撮影し直して確かめてください。"
                     ) from error
             except BaseException:
                 with contextlib.suppress(CaptureError):
@@ -359,8 +422,7 @@ def click(
                 raise
             else:
                 inputs.move(*spot.cursor)
-    result = {**meta, "clicked": {"x": x, "y": y, "captureId": capture_id, "what": what}}
-    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
+    return return_value
 
 
 def main() -> None:

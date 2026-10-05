@@ -200,3 +200,32 @@ def test_a_window_already_in_front_is_not_kept_waiting(store, monkeypatch):
     control = FakeControl(foreground=42)
     with Pointer(store, control, settle_seconds=0, focus_seconds=0.5).at("c2", 10, 20, keep_clear="point"):
         assert slept == []
+
+
+def test_an_end_point_is_followed_and_checked_like_the_start(pointer, control):
+    with pointer.at("c2", 10, 20, keep_clear="point", must_hit_target=True, to=(30, 40)) as spot:
+        assert spot == Spot(screen=(110, 220), cursor=(5, 6), end=(130, 240))
+    assert ("window_at", 110, 220) in control.calls
+    assert ("window_at", 130, 240) in control.calls
+
+
+def test_an_end_point_outside_the_image_is_rejected_before_anything(pointer, control):
+    with pytest.raises(CaptureError, match="画像の外"):
+        with pointer.at("c2", 10, 20, keep_clear="point", to=(10, 600)):
+            pytest.fail("the body must not run")
+    assert control.calls == []
+
+
+def test_must_hit_target_refuses_an_end_point_covered_by_another_window(pointer, control):
+    control.covered_at = {(130, 240): 555}  # the start is clear, the end is under another window
+    with pytest.raises(CaptureError) as refused:
+        with pointer.at("c2", 10, 20, keep_clear="point", must_hit_target=True, to=(30, 40)):
+            pytest.fail("the body must not run")
+    assert str(refused.value) == COVERED_MESSAGE
+    assert pointer.lock.acquire(blocking=False)
+    pointer.lock.release()
+
+
+def test_without_an_end_point_the_spot_has_none(pointer):
+    with pointer.at("c2", 10, 20, keep_clear="point") as spot:
+        assert spot.end is None

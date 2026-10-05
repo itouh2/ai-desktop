@@ -72,6 +72,49 @@ def test_double_click_presses_twice(user32, sleeps):
     assert sleeps == [inputs.HOVER_SECONDS, inputs.PRESS_SECONDS, inputs.DOUBLE_CLICK_GAP_SECONDS, inputs.PRESS_SECONDS]
 
 
+def test_drag_presses_moves_in_steps_and_releases_at_the_end(user32, sleeps):
+    # Games follow the cursor once a frame: the move goes in small steps between press and release.
+    inputs.drag((100, 200), (300, 400))
+    flags = [[event.u.mi.dwFlags for event in batch] for batch in user32.batches]
+    steps = inputs.DRAG_STEPS
+    assert flags == (
+        [[MOVE_FLAGS], [MOVE_FLAGS | inputs.MOUSEEVENTF_LEFTDOWN]]
+        + [[MOVE_FLAGS]] * steps
+        + [[MOVE_FLAGS | inputs.MOUSEEVENTF_LEFTUP]]
+    )
+    assert sleeps == [inputs.HOVER_SECONDS, inputs.PRESS_SECONDS] + [inputs.DRAG_STEP_SECONDS] * steps + [
+        inputs.HOVER_SECONDS
+    ]
+
+
+def test_drag_steps_end_exactly_on_the_end_point(monkeypatch, sleeps):
+    points = []
+    monkeypatch.setattr(inputs, "_mouse_at", lambda x, y, flags: points.append((x, y, flags)) or (x, y, flags))
+    monkeypatch.setattr(inputs, "_send", lambda *events: None)
+    inputs.drag((100, 200), (300, 401))
+    moves = [(x, y) for x, y, flags in points if flags == 0]
+    assert moves[0] == (100, 200)  # the hover before the press
+    assert moves[-1] == (300, 401)
+    assert len(moves) == 1 + inputs.DRAG_STEPS
+    assert points[-1] == (300, 401, inputs.MOUSEEVENTF_LEFTUP)
+
+
+def test_drag_releases_the_button_when_a_move_fails(monkeypatch, sleeps):
+    sent = []
+
+    def send(*events):
+        event = events[0]
+        if event[2] == 0 and len(sent) == 3:  # the second step of the move fails
+            raise CaptureError("入力を送れませんでした（Win32 エラー 5）。")
+        sent.append(event)
+
+    monkeypatch.setattr(inputs, "_mouse_at", lambda x, y, flags: (x, y, flags))
+    monkeypatch.setattr(inputs, "_send", send)
+    with pytest.raises(CaptureError):
+        inputs.drag((100, 200), (300, 400))
+    assert sent[-1][2] == inputs.MOUSEEVENTF_LEFTUP
+
+
 def test_tap_alt_presses_and_releases_alt(user32):
     inputs.tap_alt()
     down, up = user32.batches[0]

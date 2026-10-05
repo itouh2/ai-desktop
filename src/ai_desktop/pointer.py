@@ -1,4 +1,4 @@
-"""Prepares and cleans up an operation at one point of a capture (a click, a cursor move)."""
+"""Prepares and cleans up an operation at a point of a capture (a click, a cursor move, a drag)."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ COVERED_MESSAGE = (
 class Spot:
     screen: tuple[int, int]  # the point, in physical screen pixels
     cursor: tuple[int, int]  # where the cursor was before; the caller decides whether to put it back
+    end: tuple[int, int] | None = None  # the end point of a drag, in physical screen pixels
 
 
 class Pointer:
@@ -58,6 +59,7 @@ class Pointer:
         keep_clear: Literal["point", "capture"],
         return_focus: bool = True,
         must_hit_target: bool = False,
+        to: tuple[float, float] | None = None,
     ) -> Iterator[Spot]:
         """Get ready to operate at (x, y) of the capture and yield where that is on screen.
 
@@ -67,13 +69,15 @@ class Pointer:
         the previous foreground window is not restored (a window target stays in front).
         must_hit_target=True refuses a window target unless that window is the top-level window at
         the point once it is in front, so an operation never lands on a window over it or, when the
-        window got smaller than the capture, on what is behind it."""
+        window got smaller than the capture, on what is behind it. to is the end point of a drag on
+        the same capture: it is checked like (x, y) and comes back as Spot.end."""
         if not self.lock.acquire(blocking=False):
             raise CaptureError("ほかの操作を実行中です。終わるまで待ってください。")
         try:
             _, meta = self._store.get(capture_id)
             target = self._store.target(capture_id)
-            if not (0 <= x < meta["imageWidth"] and 0 <= y < meta["imageHeight"]):
+            points = [(x, y)] if to is None else [(x, y), to]
+            if not all(0 <= px < meta["imageWidth"] and 0 <= py < meta["imageHeight"] for px, py in points):
                 raise CaptureError("位置が画像の外です。")
             browser = self._control.find_window(VIEWER_TITLE_PREFIX)
             if target.kind == "window" and target.id == browser:
@@ -92,8 +96,11 @@ class Pointer:
                     if previous != target.id:
                         time.sleep(self._focus_seconds)
                     origin = self._control.window_origin(target.id)
-                screen = image_to_screen(meta, x, y, origin)
-                if must_hit_target and target.kind == "window" and self._control.window_at(*screen) != target.id:
+                screens = [image_to_screen(meta, px, py, origin) for px, py in points]
+                screen = screens[0]
+                if must_hit_target and target.kind == "window" and any(
+                    self._control.window_at(*point) != target.id for point in screens
+                ):
                     raise CaptureError(COVERED_MESSAGE)
                 if browser is not None and target.kind == "monitor" and self._in_the_way(browser, screen, meta, keep_clear):
                     self._control.minimize(browser)
@@ -101,7 +108,7 @@ class Pointer:
                     time.sleep(self._settle_seconds)
                     if not self._control.is_minimized(browser):
                         raise CaptureError("ブラウザを最小化できなかったため、操作しませんでした。")
-                yield Spot(screen=screen, cursor=cursor)
+                yield Spot(screen=screen, cursor=cursor, end=screens[1] if to is not None else None)
             finally:
                 if minimized:
                     self._control.restore(browser)
