@@ -143,9 +143,11 @@ function renderAgent() {
 
 // Asks the server to switch the permission. The page is not changed here: it follows the next state
 // event. If the request fails, the checkbox goes back to what the server last said and the reason shows.
+// Turning it on names the target this page shows, so the server refuses it if the page has just changed.
 async function setAgent(enabled) {
   try {
-    const response = await post("/agent", {enabled: enabled});
+    const body = enabled ? {enabled: true, target: view ? view.targetKey : ""} : {enabled: false};
+    const response = await post("/agent", body);
     const result = await response.json();
     if (result.error) {
       renderAgent();

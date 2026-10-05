@@ -36,11 +36,17 @@ AGENT_OFF_MESSAGE = "ページで『Claude に操作を任せる』がオフで�
 NO_PAGE_FOR_CLICK_MESSAGE = "表示中のページがありません。先に show_annotated で対象のウィンドウを表示してください。"
 MONITOR_CLICK_MESSAGE = "画面全体の撮影ではクリックできません。対象のウィンドウを capture_window で撮り、ページに表示してください。"
 OTHER_WINDOW_MESSAGE = "クリックできるのは、ページに表示中のウィンドウだけです。"
+AGENT_STALE_MESSAGE = "ページの表示が別のウィンドウに変わりました。表示を確かめてから、もう一度オンにしてください。"
 
 
 def _accepts_messages(view: dict) -> bool:
     """Whether the page offers a way to send Claude a message (buttons or the message box)."""
     return bool(view["buttons"]) or view["messageBox"]
+
+
+def _target_key(target: Target) -> str:
+    """How the page names a capture target ("window:<hwnd>" or "monitor:<id>")."""
+    return f"{target.kind}:{target.id}"
 
 
 def _token_matches(candidate: str, token: str) -> bool:
@@ -135,7 +141,9 @@ class Viewer:
         """Make this the current view; True when an open tab confirmed it within the timeout.
 
         buttons and message_box are the page's ways of sending Claude a message: a button
-        sends its label, the message box sends what the user typed."""
+        sends its label, the message box sends what the user typed. The permission for Claude's
+        clicks belongs to the window the page showed when the user gave it, so showing another
+        window or a monitor turns it off; a newer capture of the same window keeps it."""
         _, meta = self._store.get(capture_id)
         target = self._store.target(capture_id)
         self.ensure_started()
@@ -153,7 +161,11 @@ class Viewer:
                 "buttons": list(buttons or []),
                 "messageBox": bool(message_box),
                 "target": target.kind,
+                "targetKey": _target_key(target),
             }
+            if self._agent and target != self._shown_target:
+                self._agent = False
+                self._bump_state()
             self._shown_target = target  # kept here: the shown capture may leave the store before a click
             if self._state == "waiting" and not _accepts_messages(self._view):
                 self._wait_generation += 1  # the waiter returns None
@@ -297,9 +309,16 @@ class Viewer:
 
     # --- Claude's clicks: permission and records -------------------------------------------
 
-    def set_agent(self, enabled: bool) -> None:
-        """The page's switch for letting Claude click: the only way the permission changes."""
+    def set_agent(self, enabled: bool, target_key: str | None = None) -> None:
+        """The page's switch for letting Claude click: the only way the permission is given.
+
+        Turning it on names the target the page showed (its targetKey); unless that is still the
+        shown target, it raises CaptureError(AGENT_STALE_MESSAGE) and stays off, so a page that
+        changed under the user's click cannot hand over a window they did not see. Turning it off
+        always works."""
         with self._changed:
+            if enabled and (self._shown_target is None or target_key != _target_key(self._shown_target)):
+                raise CaptureError(AGENT_STALE_MESSAGE)
             self._agent = enabled
             self._bump_state()
 
@@ -468,11 +487,16 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
                     self._send_json(200, {"ok": True})
             elif path == "/agent":
                 enabled = body.get("enabled")
-                if not isinstance(enabled, bool):
+                target_key = body.get("target")
+                if not isinstance(enabled, bool) or (enabled and not isinstance(target_key, str)):
                     self._send_json(400, {"error": "要求の形式が正しくありません。"})
                     return
-                viewer.set_agent(enabled)
-                self._send_json(200, {"ok": True})
+                try:
+                    viewer.set_agent(enabled, target_key if enabled else None)
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
             elif path == "/message":
                 text = body.get("text")
                 if not isinstance(text, str):

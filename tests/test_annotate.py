@@ -89,8 +89,15 @@ def test_page_has_the_agent_toggle():
     page = render_shell("n0nce")
     assert '<div id="agent"><label><input type="checkbox"> ' in page
     assert "Claude に操作を任せる（このウィンドウだけ・左クリック）" in page
-    assert 'post("/agent", {enabled:' in page
+    assert 'post("/agent", body)' in page
     assert '<ol id="agent-log"></ol>' in page
+
+
+def test_turning_the_agent_on_names_the_shown_target():
+    page = render_shell("n0nce")
+    set_agent = page.split("async function setAgent(enabled)")[1].split("\n}\n")[0]
+    assert "{enabled: true, target: view ? view.targetKey" in set_agent
+    assert "{enabled: false}" in set_agent
 
 
 def test_agent_checkbox_has_no_id_a_label_could_target():

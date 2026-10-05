@@ -316,7 +316,8 @@ def click(
     """Left-click once on a point of the window the user's viewer page is showing, wait, and
     capture the same window again. It works only while the user has turned on "Claude に操作を任せる"
     on that page, and only for that window (a newer capture of the same window is fine; a monitor
-    capture is not). It presses the user's real screen, so use it only for what the user asked
+    capture is not). Showing a different window or a monitor on the page turns the switch off, so
+    the user has to turn it on again for the new window. It presses the user's real screen, so use it only for what the user asked
     you to do. It cannot right-click, double-click or drag. Windows where Claude Code runs
     (editors, terminals, the Claude app), windows whose app cannot be identified and the viewer
     browser are refused: the user presses those. Put what you press in what, and after every click you must tell the user in the chat

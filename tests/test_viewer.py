@@ -11,7 +11,7 @@ from fakes import BROWSER, FakeControl
 
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta
-from ai_desktop.viewer import TOKEN_HEADER, Viewer
+from ai_desktop.viewer import AGENT_STALE_MESSAGE, TOKEN_HEADER, Viewer
 
 MONITOR_META = build_meta("monitor:1 DISPLAY1", 0, 0, (3200, 1600), (1568, 784), 0.49)
 WINDOW_META = build_meta("window:42 Book1 - Excel", -100, 50, (800, 600), (800, 600), 1.0)
@@ -623,19 +623,26 @@ def test_agent_is_off_until_the_page_turns_it_on(viewer):
     viewer.publish("c2", "", "Excel")
     with pytest.raises(CaptureError, match="オフです"):
         viewer.authorize_click("c2")
-    viewer.set_agent(True)
+    viewer.set_agent(True, "window:42")
     viewer.authorize_click("c2")  # no error
 
 
+def test_enable_needs_a_shown_page(viewer):
+    with pytest.raises(CaptureError, match=re.escape(AGENT_STALE_MESSAGE)):
+        viewer.set_agent(True, "window:42")
+    with pytest.raises(CaptureError, match="オフです"):
+        viewer.authorize_click("c2")
+
+
 def test_authorize_needs_a_shown_page(viewer):
-    viewer.set_agent(True)
+    viewer._agent = True  # set_agent cannot turn it on without a page; the check stays as a guard
     with pytest.raises(CaptureError, match="表示中のページがありません"):
         viewer.authorize_click("c2")
 
 
 def test_authorize_refuses_monitor_captures(viewer):
     viewer.publish("c1", "", "Display")
-    viewer.set_agent(True)
+    viewer.set_agent(True, "monitor:1")
     with pytest.raises(CaptureError, match="画面全体の撮影ではクリックできません"):
         viewer.authorize_click("c1")
 
@@ -643,28 +650,81 @@ def test_authorize_refuses_monitor_captures(viewer):
 def test_authorize_allows_a_newer_capture_of_the_shown_window(viewer, store):
     newer = store.add(b"window-jpeg", WINDOW_META, Target("window", 42))
     viewer.publish("c2", "", "Excel")
-    viewer.set_agent(True)
+    viewer.set_agent(True, "window:42")
     viewer.authorize_click(newer)  # no error
 
 
 def test_authorize_refuses_another_window(viewer, store):
     other = store.add(b"window-jpeg", WINDOW_META, Target("window", 43))
     viewer.publish("c2", "", "Excel")
-    viewer.set_agent(True)
+    viewer.set_agent(True, "window:42")
     with pytest.raises(CaptureError, match="表示中のウィンドウだけ"):
         viewer.authorize_click(other)
 
 
-def test_authorize_follows_the_page_that_is_shown_now(viewer):
+def agent_enabled(viewer):
+    _, state = viewer.next_update(0, 0, 0)
+    return state["agent"]["enabled"]
+
+
+def test_showing_another_window_turns_the_permission_off(viewer, store):
+    other = store.add(b"window-jpeg", WINDOW_META, Target("window", 43))
     viewer.publish("c2", "", "Excel")
-    viewer.set_agent(True)
-    viewer.publish("c1", "", "Display")  # the page now shows the whole monitor
-    with pytest.raises(CaptureError, match="表示中のウィンドウだけ"):
+    viewer.set_agent(True, "window:42")
+    _, before = viewer.next_update(0, 0, 0)
+    viewer.publish(other, "", "Notepad")
+    _, after = viewer.next_update(0, before["version"], 0)
+    assert after["agent"]["enabled"] is False
+    for capture_id in (other, "c2"):
+        with pytest.raises(CaptureError, match="オフです"):
+            viewer.authorize_click(capture_id)
+
+
+def test_showing_a_monitor_turns_the_permission_off(viewer):
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True, "window:42")
+    viewer.publish("c1", "", "Display")
+    assert agent_enabled(viewer) is False
+    with pytest.raises(CaptureError, match="オフです"):
         viewer.authorize_click("c2")
 
 
+def test_a_newer_capture_of_the_same_window_keeps_the_permission(viewer, store):
+    newer = store.add(b"window-jpeg", WINDOW_META, Target("window", 42))
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True, "window:42")
+    viewer.publish(newer, "", "Excel")
+    assert agent_enabled(viewer) is True
+    viewer.authorize_click(newer)  # no error
+
+
+def test_enable_is_refused_when_the_page_shows_another_window(viewer):
+    viewer.publish("c2", "", "Excel")  # the page now shows window 42; a tab still showing 43 asks
+    for stale in ("window:43", "monitor:1", ""):
+        status, result = post(viewer, "/agent", {"enabled": True, "target": stale})
+        assert (status, result) == (200, {"error": AGENT_STALE_MESSAGE})
+    assert agent_enabled(viewer) is False
+    assert post(viewer, "/agent", {"enabled": True, "target": "window:42"}) == (200, {"ok": True})
+    assert agent_enabled(viewer) is True
+
+
+def test_disable_needs_no_target(viewer):
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True, "window:42")
+    assert post(viewer, "/agent", {"enabled": False}) == (200, {"ok": True})
+    assert agent_enabled(viewer) is False
+
+
+def test_enable_without_a_target_is_a_bad_request(viewer):
+    viewer.publish("c2", "", "Excel")
+    assert post(viewer, "/agent", {"enabled": True})[0] == 400
+    assert post(viewer, "/agent", {"enabled": True, "target": 42})[0] == 400
+    assert agent_enabled(viewer) is False
+
+
 def test_agent_and_clicks_reach_the_page_state(viewer):
-    viewer.set_agent(True)
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True, "window:42")
     viewer.record_click("研究卓を選ぶ")
     _, state = viewer.next_update(0, 0, 0)
     assert state["agent"]["enabled"] is True
@@ -674,8 +734,9 @@ def test_agent_and_clicks_reach_the_page_state(viewer):
 
 
 def test_each_change_moves_the_state_version(viewer):
+    viewer.publish("c2", "", "Excel")
     _, first = viewer.next_update(0, 0, 0)
-    viewer.set_agent(True)
+    viewer.set_agent(True, "window:42")
     _, second = viewer.next_update(0, first["version"], 0)
     viewer.record_click("タブを開く")
     _, third = viewer.next_update(0, second["version"], 0)
@@ -690,9 +751,10 @@ def test_click_records_keep_the_newest_five(viewer):
 
 
 def test_closing_the_last_tab_turns_the_agent_off(viewer):
+    viewer.publish("c2", "", "Excel")
     viewer.register_client()
     viewer.register_client()
-    viewer.set_agent(True)
+    viewer.set_agent(True, "window:42")
     viewer.unregister_client()
     _, state = viewer.next_update(0, 0, 0)
     assert state["agent"]["enabled"] is True
@@ -701,20 +763,24 @@ def test_closing_the_last_tab_turns_the_agent_off(viewer):
     assert state["agent"]["enabled"] is False
 
 
-def test_publish_carries_the_target_kind(viewer):
+def test_publish_carries_the_target_kind_and_key(viewer):
     viewer.publish("c1", "", "Display")
-    assert viewer.next_view(0, 0)["target"] == "monitor"
+    view = viewer.next_view(0, 0)
+    assert (view["target"], view["targetKey"]) == ("monitor", "monitor:1")
     viewer.publish("c2", "", "Excel")
-    assert viewer.next_view(1, 0)["target"] == "window"
+    view = viewer.next_view(1, 0)
+    assert (view["target"], view["targetKey"]) == ("window", "window:42")
 
 
 def test_agent_endpoint_checks_auth_and_body(viewer):
-    viewer.ensure_started()
-    assert post(viewer, "/agent", {"enabled": True}, token="wrong")[0] == 403
-    assert post(viewer, "/agent", {"enabled": True}, origin="http://evil.example")[0] == 403
-    assert post(viewer, "/agent", {"enabled": "yes"})[0] == 400
+    viewer.publish("c2", "", "Excel")
+    enable = {"enabled": True, "target": "window:42"}
+    assert post(viewer, "/agent", enable, token="wrong")[0] == 403
+    assert post(viewer, "/agent", enable, origin="http://evil.example")[0] == 403
+    assert post(viewer, "/agent", {"enabled": "yes", "target": "window:42"})[0] == 400
     assert post(viewer, "/agent", {})[0] == 400
-    assert post(viewer, "/agent", {"enabled": True}) == (200, {"ok": True})
+    assert agent_enabled(viewer) is False
+    assert post(viewer, "/agent", enable) == (200, {"ok": True})
     _, state = viewer.next_update(0, 0, 0)
     assert state["agent"]["enabled"] is True
     assert post(viewer, "/agent", {"enabled": False}) == (200, {"ok": True})
@@ -728,7 +794,7 @@ def test_authorize_still_knows_the_shown_window_after_its_capture_left_the_store
     viewer = Viewer(store, control, settle_seconds=0, after_click_seconds=0, ack_timeout=1.0, heartbeat_seconds=0.2)
     try:
         viewer.publish(shown, "", "Excel")
-        viewer.set_agent(True)
+        viewer.set_agent(True, "window:42")
         store.add(b"window-jpeg", WINDOW_META, Target("window", 42))
         newest = store.add(b"window-jpeg", WINDOW_META, Target("window", 42))  # `shown` is gone now
         viewer.authorize_click(newest)  # no error

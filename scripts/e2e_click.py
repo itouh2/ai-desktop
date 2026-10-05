@@ -4,8 +4,10 @@
    which must stay open: the permission turns off when no page tab is connected).
 2. With the page's "Claude に操作を任せる" off (POST /agent {"enabled": false}), click is refused
    with a message saying it is off, and the test window sees no click.
-3. With it on, the same click presses the middle of the window exactly once (no double-click),
-   leaves the window in front and puts the cursor back where it was, and returns what was pressed.
+3. With it on (POST /agent {"enabled": true, "target": "window:<id>"}, naming the shown window
+   as the page does), the same click presses the middle of the window exactly once (no
+   double-click), leaves the window in front and puts the cursor back where it was, and returns
+   what was pressed.
 4. Turns the permission off again and closes the test window.
 
 Opens one browser tab and a small test window (closed at the end). Do not touch the mouse while
@@ -59,8 +61,10 @@ def target_window():
     return next((w for w in capture.list_windows() if w.title == TITLE), None)
 
 
-async def set_agent(url: str, enabled: bool) -> None:
-    answer = await asyncio.to_thread(post_json, url, "/agent", {"enabled": enabled})
+async def set_agent(url: str, enabled: bool, window_id: int) -> None:
+    """Switch the permission the way the page does: turning it on names the window it shows."""
+    body = {"enabled": True, "target": f"window:{window_id}"} if enabled else {"enabled": False}
+    answer = await asyncio.to_thread(post_json, url, "/agent", body)
     assert answer == {"ok": True}, answer
 
 
@@ -89,8 +93,8 @@ async def run(lines: queue.Queue) -> None:
             print("before:", before, "cursor", control.cursor_pos())
             assert control.cursor_pos() == away, (control.cursor_pos(), away)
 
-            await set_agent(url, False)
-            refused = await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
+            await set_agent(url, False, window.id)
+            refused =await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
             text = refused.content[0].text
             state = await asyncio.to_thread(latest, lines, 1.0, before)
             print("switch off:", text, "state", state, "cursor", control.cursor_pos())
@@ -99,8 +103,8 @@ async def run(lines: queue.Queue) -> None:
             assert state["single"] == before["single"], f"the window got a click while the switch was off: {state}"
             assert control.cursor_pos() == away, (control.cursor_pos(), away)
 
-            await set_agent(url, True)
-            result = await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
+            await set_agent(url, True, window.id)
+            result =await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
             assert not result.is_error, result.content[0].text
             assert result.content[0].type == "image", result.content[0].type
             clicked = json.loads(result.content[1].text)
@@ -114,7 +118,7 @@ async def run(lines: queue.Queue) -> None:
             assert clicked["clicked"]["captureId"] == capture_id, clicked["clicked"]
         finally:
             try:
-                await set_agent(url, False)  # leave the permission off however the checks went
+                await set_agent(url, False, window.id)  # leave the permission off however the checks went
             except Exception as error:  # noqa: BLE001 - do not hide the real failure
                 print("could not turn the switch off:", error)
 
