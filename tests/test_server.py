@@ -274,6 +274,8 @@ def test_instructions_are_one_paragraph():
     assert "five nulls" in server.INSTRUCTIONS
     assert "without buttons or message_box" in server.INSTRUCTIONS
     assert "html may be omitted" in server.INSTRUCTIONS
+    assert "更新" in server.INSTRUCTIONS
+    assert 'via "refresh"' in server.INSTRUCTIONS
 
 
 def test_show_annotated_passes_explanation_and_buttons(viewer):
@@ -310,6 +312,15 @@ def test_show_annotated_rejects_bad_buttons(viewer, buttons, message):
     assert viewer.published == []
 
 
+@pytest.mark.parametrize("label", ["更新", " 更新 "])
+def test_show_annotated_rejects_the_reserved_refresh_label(viewer, label):
+    call("capture_monitor")
+    result = call("show_annotated", {"capture_id": "c1", "buttons": ["できた", label]})
+    assert result.is_error
+    assert "「更新」はページに常に出ている" in result.content[0].text
+    assert viewer.published == []
+
+
 def test_wait_for_message_returns_a_button_label_and_fresh_capture(viewer):
     call("capture_window", {"title": "excel"})
     viewer.reply = {"message": "分からない", "via": "button"}
@@ -334,6 +345,15 @@ def test_wait_for_message_returns_a_typed_message_and_fresh_capture(viewer):
     meta = json.loads(text.text)
     assert (meta["message"], meta["via"]) == ("ブラー+ を引いた", "text")
     assert meta["captureId"] == "c2"
+
+
+def test_wait_for_message_returns_a_refresh_and_fresh_capture(viewer):
+    call("capture_window", {"title": "excel"})
+    viewer.reply = {"message": "", "via": "refresh"}
+    result = call("wait_for_message", {})
+    assert not result.is_error
+    meta = json.loads(result.content[1].text)
+    assert (meta["message"], meta["via"], meta["captureId"]) == ("", "refresh", "c2")
 
 
 def test_wait_for_message_timeout_returns_null(viewer):

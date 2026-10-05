@@ -22,7 +22,7 @@ _log = logging.getLogger(__name__)
 
 ACK_TIMEOUT_SECONDS = 1.5
 HEARTBEAT_SECONDS = 15.0
-AFTER_CLICK_SECONDS = 0.3  # games handle a click on a later frame; keep focus and cursor until then
+AFTER_CLICK_SECONDS = 0.3  # apps (games especially) may handle a click on a later frame; keep focus and cursor until then
 MAX_BODY_BYTES = 16 * 1024  # fits a MAX_MESSAGE_CHARS message even with every character \u-escaped
 TOKEN_HEADER = "X-AI-Desktop-Token"
 MAX_EXPLANATION_CHARS = 4000
@@ -165,8 +165,8 @@ class Viewer:
     # --- messages from the page ------------------------------------------------------------
 
     def wait_for_message(self, timeout: float) -> dict | None:
-        """Block until the page sends Claude a message; {"message": text, "via": "button" or
-        "text"}, or None on timeout.
+        """Block until the page sends Claude a message; {"message": text, "via": "button",
+        "text" or "refresh"}, or None on timeout.
 
         A newer wait cancels an older one, which then returns None, so a wait left over
         from an interrupted turn cannot block the next one."""
@@ -200,6 +200,16 @@ class Viewer:
             if self._view is None or label not in self._view["buttons"]:
                 raise CaptureError(UNKNOWN_BUTTON_MESSAGE)
             self._answer({"message": label, "via": "button"})
+
+    def refresh(self) -> None:
+        """The page's built-in refresh button was pressed; wakes the waiting tool call.
+
+        Unlike press there is no page check: a wait only runs while the shown page can send
+        messages, because publishing a page that cannot ends the wait."""
+        with self._changed:
+            if self._state != "waiting":
+                raise CaptureError(NOT_WAITING_MESSAGE)
+            self._answer({"message": "", "via": "refresh"})
 
     def send_message(self, text: str) -> None:
         """The user typed a message in the page's message box; wakes the waiting tool call."""
@@ -392,6 +402,13 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
                     return
                 try:
                     viewer.press(label)
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
+            elif path == "/refresh":
+                try:
+                    viewer.refresh()
                 except CaptureError as error:
                     self._send_json(200, {"error": str(error)})
                 else:

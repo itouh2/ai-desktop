@@ -7,6 +7,9 @@
    message box refuses typed text.
 4. A page with message_box returns typed text (via "text") plus a fresh capture.
    Screenshots of both pages are saved to smoke-out/.
+5. The page's built-in 更新 button: a POST to /refresh while wait_for_message is waiting
+   returns {"message": "", "via": "refresh"} plus a fresh capture.
+6. show_annotated with no html (only capture_id and title) is accepted.
 
 Opens one browser tab and a small test window (closed at the end)."""
 
@@ -133,6 +136,20 @@ async def run(lines) -> None:
         print("message result:", result.content[0].type, repr(answer["message"]), answer["via"])
         assert result.content[0].type == "image"
         assert (answer["message"], answer["via"]) == ("e2e: 入力欄から\n2 行で送信", "text")
+
+        waiter = asyncio.create_task(client.call_tool("wait_for_message", {"timeout_seconds": 30}))
+        await asyncio.sleep(1.5)
+        refreshed = await asyncio.to_thread(post_json, url, "/refresh", {})
+        print("refresh:", refreshed)
+        assert refreshed == {"ok": True}, refreshed
+        result = await waiter
+        answer = json.loads(result.content[1].text)
+        print("refresh result:", result.content[0].type, repr(answer["message"]), answer["via"])
+        assert result.content[0].type == "image" and (answer["message"], answer["via"]) == ("", "refresh")
+
+        bare = await client.call_tool("show_annotated", {"capture_id": meta["captureId"], "title": "e2e without html"})
+        print("show without html:", bare.content[0].text)
+        assert not bare.is_error, bare.content[0].text
 
 
 def main() -> None:

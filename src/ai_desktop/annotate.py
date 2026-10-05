@@ -32,6 +32,7 @@ _ARROWHEAD = (
 
 VIEWER_TITLE_PREFIX = "ai-desktop | "
 MAX_MESSAGE_CHARS = 1000
+REFRESH_LABEL = "更新"  # the page's built-in refresh button; reserved, so Claude's buttons cannot use it
 
 _VIEWER_CSS = """
 #stage { cursor: crosshair; }
@@ -50,6 +51,8 @@ _VIEWER_CSS = """
 #bar button { padding: 6px 14px; border: 0; border-radius: 6px; background: #e5484d; color: #fff;
   font: inherit; font-weight: 700; cursor: pointer; }
 #bar button:disabled { background: #555; color: #aaa; cursor: default; }
+#bar #refresh { background: transparent; border: 1px solid #888; color: #ddd; }
+#bar #refresh:disabled { border-color: #555; color: #777; }
 #bar-state { margin-left: auto; color: #ccc; }
 #compose { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
 #message { flex: 1; box-sizing: border-box; min-height: 36px; max-height: 160px; padding: 6px 10px;
@@ -106,6 +109,7 @@ function renderButtons() {
 function syncControls() {
   const enabled = buttonState === "waiting" && !sending;
   for (const button of document.querySelectorAll("#buttons button")) button.disabled = !enabled;
+  document.getElementById("refresh").disabled = !enabled;
   document.getElementById("send").disabled = !enabled;
 }
 
@@ -143,10 +147,12 @@ async function sendMessage() {
   }
 }
 
-async function press(label) {
-  for (const button of document.querySelectorAll("#buttons button")) button.disabled = true;
+// Runs send, the POST of a reply to Claude (a button or 更新). The caller has already switched its
+// control off, and it stays off until Claude's state changes; if the server refuses the reply or
+// sending fails, the controls come back and the reason is shown.
+async function sendReply(send) {
   try {
-    const response = await post("/press", {button: label});
+    const response = await send();
     const result = await response.json();
     if (result.error) {
       renderButtons();
@@ -156,6 +162,16 @@ async function press(label) {
     renderButtons();
     document.getElementById("bar-state").textContent = "送信できませんでした: " + error;
   }
+}
+
+function press(label) {
+  for (const button of document.querySelectorAll("#buttons button")) button.disabled = true;
+  return sendReply(() => post("/press", {button: label}));
+}
+
+function refresh() {
+  document.getElementById("refresh").disabled = true;
+  return sendReply(() => post("/refresh", {}));
 }
 
 function status(text, isError) {
@@ -224,6 +240,7 @@ addEventListener("DOMContentLoaded", () => {
   });
   input.addEventListener("input", fitMessage);
   document.getElementById("send").addEventListener("click", sendMessage);
+  document.getElementById("refresh").addEventListener("click", refresh);
   document.getElementById("stage").addEventListener("click", (event) => {
     clearTimeout(pending);
     if (event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")) {
@@ -280,7 +297,8 @@ def render_shell(nonce: str) -> str:
         '<div id="annotations"></div>'
         "</div></div>\n"
         '<aside id="side" hidden></aside>\n'
-        '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span>'
+        f'<div id="bar" hidden><button id="refresh" type="button">{REFRESH_LABEL}</button>'
+        '<span id="buttons"></span><span id="bar-state"></span>'
         f'<div id="compose" hidden><textarea id="message" rows="1" maxlength="{MAX_MESSAGE_CHARS}" '
         'placeholder="メッセージ（Enter で送信、Shift+Enter で改行）"></textarea>'
         '<button id="send" type="button">送信</button></div></div>\n'

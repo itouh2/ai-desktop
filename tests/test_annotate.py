@@ -43,12 +43,26 @@ def test_clicks_on_notes_and_badges_are_not_forwarded():
 
 def test_viewer_shell_has_button_bar_and_explanation_panel():
     page = render_shell("n0nce")
-    assert '<div id="bar" hidden><span id="buttons"></span><span id="bar-state"></span>' in page
+    assert (
+        '<div id="bar" hidden><button id="refresh" type="button">更新</button>'
+        '<span id="buttons"></span><span id="bar-state"></span>'
+    ) in page
     assert '<aside id="side" hidden></aside>' in page
     assert "button.textContent = label;" in page
     assert 'side.textContent = next.explanation || "";' in page
     assert 'post("/press", {button: label})' in page
     assert 'events.addEventListener("state"' in page
+
+
+def test_viewer_shell_has_a_builtin_refresh_button():
+    page = render_shell("n0nce")
+    assert (
+        '<div id="bar" hidden><button id="refresh" type="button">更新</button>'
+        '<span id="buttons"></span><span id="bar-state"></span>'
+    ) in page
+    assert 'post("/refresh", {})' in page
+    assert 'document.getElementById("refresh").disabled = !enabled;' in page
+    assert "#bar #refresh {" in page
 
 
 def test_viewer_shell_reads_top_to_bottom_image_explanation_then_replies():

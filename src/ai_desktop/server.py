@@ -16,6 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from ai_desktop import capture, control, inputs
+from ai_desktop.annotate import REFRESH_LABEL
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
 from ai_desktop.pointer import Pointer
@@ -40,7 +41,7 @@ user to send you messages without leaving it: pass buttons (fixed replies such a
 tell you something the buttons cannot, like what they see or a question), plus an \
 explanation, then call wait_for_message; you get the message (and whether it came from \
 a button or the text box) plus a fresh capture of the same target, so react to it and, \
-to keep going, show the page again and wait again. If it returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box (html may be omitted) so the page leaves its thinking state."""
+to keep going, show the page again and wait again. Such a page always has a built-in 更新 (refresh) button too, so never put 更新 in buttons; a message with via "refresh" means the user wants you to look again, so read the fresh capture and show the current step again. If it returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box (html may be omitted) so the page leaves its thinking state."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
@@ -87,6 +88,8 @@ def _recapture(target: Target) -> tuple[PILImage.Image, dict]:
 
 def _clean_buttons(buttons: list[str] | None) -> list[str]:
     labels = [label.strip() for label in buttons or [] if label.strip()]
+    if REFRESH_LABEL in labels:
+        raise ToolError(f"「{REFRESH_LABEL}」はページに常に出ているので、buttons に入れないでください。")
     if len(labels) > MAX_BUTTONS:
         raise ToolError(f"buttons は {MAX_BUTTONS} 個までです（{len(labels)} 個）。")
     too_long = [label for label in labels if len(label) > MAX_BUTTON_CHARS]
@@ -183,7 +186,8 @@ def show_annotated(
     image. buttons and message_box are the page's ways for the user to send you a message:
     buttons are labels (up to 6, 30 chars each) shown above the image, each sending its own
     label; message_box=true adds a text box (Enter sends, Shift+Enter breaks the line) for
-    free text. With either, call wait_for_message next to receive what the user sends."""
+    free text. With either, call wait_for_message next to receive what the user sends.
+    A page with buttons or message_box also gets a built-in 更新 (refresh) button; never put 更新 in buttons."""
     if len(html) > MAX_HTML_CHARS:
         raise ToolError(f"html が長すぎます（{len(html)} 文字）。{MAX_HTML_CHARS} 文字以内にしてください。")
     labels = _clean_buttons(buttons)
@@ -209,9 +213,10 @@ def show_annotated(
 def wait_for_message(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image | str]:
     """Wait until the user sends you a message from the page shown by show_annotated (call
     it right after showing buttons or a message box). Returns {"message": "<text>",
-    "via": "button" | "text", ...metadata} plus a fresh JPEG of the same window or monitor,
+    "via": "button" | "text" | "refresh", ...metadata} plus a fresh JPEG of the same window or monitor,
     taken at that moment: via "button" means the message is the label of the pressed
     button; via "text" means the user typed it, so treat it like a chat message from them.
+    via "refresh" means the user pressed the page's built-in 更新 button (message is ""): read the fresh capture again and show the current step again.
     Returns {"message": null} after timeout_seconds (1-110, default 90); then just call it
     again. Errors if no page or no way to send a message is shown, or if the re-capture fails."""
     timeout = max(1, min(WAIT_MAX_SECONDS, int(timeout_seconds)))

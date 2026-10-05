@@ -561,3 +561,55 @@ def test_message_endpoint_checks_auth_and_state(viewer):
     assert post(viewer, "/message", {"text": "あ" * 1000}) == (200, {"ok": True})
     thread.join(5)
     assert results == [{"message": "あ" * 1000, "via": "text"}]
+
+
+# --- page messages: refresh ------------------------------------------------------------------
+
+
+def test_refresh_wakes_the_waiter(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    viewer.refresh()
+    thread.join(5)
+    assert results == [{"message": "", "via": "refresh"}]
+    assert viewer._state == "thinking"
+
+
+def test_refresh_without_a_waiter_is_refused(viewer):
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+
+
+def test_a_second_refresh_before_the_next_wait_is_refused(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    viewer.refresh()
+    thread.join(5)
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+    assert results == [{"message": "", "via": "refresh"}]
+
+
+def test_refresh_after_the_page_lost_its_inputs_is_refused(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    viewer.publish("c2", "", "Excel")
+    thread.join(5)
+    assert results == [None]
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+
+
+def test_refresh_endpoint_checks_auth_and_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert post(viewer, "/refresh", {}, token="wrong")[0] == 403
+    assert post(viewer, "/refresh", {}, origin="https://example.com")[0] == 403
+    status, result = post(viewer, "/refresh", {})
+    assert status == 200 and "待ち受けていません" in result["error"]
+    thread, results = wait_in_background(viewer)
+    assert post(viewer, "/refresh", {}) == (200, {"ok": True})
+    thread.join(5)
+    assert results == [{"message": "", "via": "refresh"}]
