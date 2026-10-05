@@ -343,7 +343,14 @@ def click(
                 inputs.click(*spot.screen)
                 viewer.record_click(what)
                 _sleep(wait)
-                shrunk, meta = _recapture(target)
+                try:
+                    shrunk, meta = _recapture(target)
+                except CaptureError as error:
+                    # The click went out; say so, or Claude may press again to "retry".
+                    raise CaptureError(
+                        f"クリックは送りました（{what}）。撮り直しに失敗しました: {error} "
+                        "もう一度押さずに、撮影し直して確かめてください。"
+                    ) from error
             except BaseException:
                 with contextlib.suppress(CaptureError):
                     inputs.move(*spot.cursor)

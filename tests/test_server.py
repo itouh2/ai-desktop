@@ -576,6 +576,10 @@ def test_click_puts_the_cursor_back_when_the_recapture_fails(hand, viewer, monke
     monkeypatch.setattr(capture, "capture_window", gone)
     result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
     assert result.is_error
+    message = result.content[0].text.removeprefix("Error executing tool click: ")
+    assert message.startswith("クリックは送りました（セルを選ぶ）。撮り直しに失敗しました: ")
+    assert "window_id 42 のウィンドウは存在しません。" in message
+    assert "もう一度押さずに" in message
     assert hand.clicks == [(110, 220, False)]
     assert hand.moves == [(5, 6)]
     assert viewer.recorded == ["セルを選ぶ"]
