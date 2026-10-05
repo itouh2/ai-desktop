@@ -9,21 +9,33 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from ai_desktop.annotate import VIEWER_TITLE_PREFIX, content_security_policy, render_shell
-from ai_desktop.captures import CaptureStore
-from ai_desktop.imaging import CaptureError, image_to_screen
+from ai_desktop.annotate import MAX_MESSAGE_CHARS, VIEWER_TITLE_PREFIX, content_security_policy, render_shell
+from ai_desktop.captures import CaptureStore, Target
+from ai_desktop.imaging import CaptureError
+from ai_desktop.pointer import SETTLE_SECONDS, Pointer
 
 _log = logging.getLogger(__name__)
 
 ACK_TIMEOUT_SECONDS = 1.5
 HEARTBEAT_SECONDS = 15.0
-SETTLE_SECONDS = 0.15  # after minimizing the browser, before the click arrives
-AFTER_CLICK_SECONDS = 0.3  # games handle a click on a later frame; keep focus and cursor until then
-MAX_BODY_BYTES = 1024
+AFTER_CLICK_SECONDS = 0.3  # apps (games especially) may handle a click on a later frame; keep focus and cursor until then
+MAX_BODY_BYTES = 16 * 1024  # fits a MAX_MESSAGE_CHARS message even with every character \u-escaped
 TOKEN_HEADER = "X-AI-Desktop-Token"
+MAX_EXPLANATION_CHARS = 4000
+NOT_WAITING_MESSAGE = "Claude が待ち受けていません。チャットで、ページで進めたいと頼んでください。"
+UNKNOWN_BUTTON_MESSAGE = "そのボタンは今は使えません。"
+NO_MESSAGE_BOX_MESSAGE = "このページでは入力欄を使えません。"
+EMPTY_MESSAGE = "メッセージが空です。"
+LONG_MESSAGE = f"メッセージは {MAX_MESSAGE_CHARS} 文字までです。"
+
+
+def _accepts_messages(view: dict) -> bool:
+    """Whether the page offers a way to send Claude a message (buttons or the message box)."""
+    return bool(view["buttons"]) or view["messageBox"]
 
 
 def _token_matches(candidate: str, token: str) -> bool:
@@ -52,6 +64,7 @@ class Viewer:
         after_click_seconds: float = AFTER_CLICK_SECONDS,
         ack_timeout: float = ACK_TIMEOUT_SECONDS,
         heartbeat_seconds: float = HEARTBEAT_SECONDS,
+        pointer: Pointer | None = None,
     ) -> None:
         self._store = store
         self._control = control
@@ -66,7 +79,11 @@ class Viewer:
         self._version = 0
         self._acked = 0
         self._clients = 0
-        self._operating = threading.Lock()
+        self._pointer = pointer if pointer is not None else Pointer(store, control, settle_seconds)
+        self._state = "idle"
+        self._state_version = 1  # new tabs receive the current state right away
+        self._wait_generation = 0
+        self._reply: dict | None = None
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -98,8 +115,19 @@ class Viewer:
 
     # --- showing ---------------------------------------------------------------------------
 
-    def publish(self, capture_id: str, html: str, title: str) -> bool:
-        """Make this the current view; True when an open tab confirmed it within the timeout."""
+    def publish(
+        self,
+        capture_id: str,
+        html: str,
+        title: str,
+        explanation: str = "",
+        buttons: list[str] | None = None,
+        message_box: bool = False,
+    ) -> bool:
+        """Make this the current view; True when an open tab confirmed it within the timeout.
+
+        buttons and message_box are the page's ways of sending Claude a message: a button
+        sends its label, the message box sends what the user typed."""
         _, meta = self._store.get(capture_id)
         self.ensure_started()
         with self._changed:
@@ -112,7 +140,15 @@ class Viewer:
                 "height": meta["imageHeight"],
                 "html": html,
                 "title": title,
+                "explanation": explanation[:MAX_EXPLANATION_CHARS],
+                "buttons": list(buttons or []),
+                "messageBox": bool(message_box),
             }
+            if self._state == "waiting" and not _accepts_messages(self._view):
+                self._wait_generation += 1  # the waiter returns None
+                self._set_state("idle")
+            elif self._state in ("thinking", "error"):
+                self._set_state("idle")
             self._changed.notify_all()
             if self._clients == 0:
                 return False
@@ -126,46 +162,134 @@ class Viewer:
     def open_browser(self) -> None:
         os.startfile(self.url)
 
+    # --- messages from the page ------------------------------------------------------------
+
+    def wait_for_message(self, timeout: float) -> dict | None:
+        """Block until the page sends Claude a message; {"message": text, "via": "button",
+        "text" or "refresh"}, or None on timeout.
+
+        A newer wait cancels an older one, which then returns None, so a wait left over
+        from an interrupted turn cannot block the next one."""
+        with self._changed:
+            if self._view is None:
+                raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
+            if not _accepts_messages(self._view):
+                raise CaptureError(
+                    "表示中のページに、メッセージを送る入口がありません。"
+                    "show_annotated に buttons か message_box を付けてください。"
+                )
+            self._wait_generation += 1
+            generation = self._wait_generation
+            self._reply = None
+            self._set_state("waiting")
+            done = lambda: self._reply is not None or self._wait_generation != generation  # noqa: E731
+            self._changed.wait_for(done, timeout=timeout)
+            if self._wait_generation != generation:
+                return None
+            if self._reply is not None:
+                reply, self._reply = self._reply, None
+                return reply
+            self._set_state("idle")
+            return None
+
+    def press(self, label: str) -> None:
+        """A page button was pressed; wakes the waiting tool call."""
+        with self._changed:
+            if self._state != "waiting":
+                raise CaptureError(NOT_WAITING_MESSAGE)
+            if self._view is None or label not in self._view["buttons"]:
+                raise CaptureError(UNKNOWN_BUTTON_MESSAGE)
+            self._answer({"message": label, "via": "button"})
+
+    def refresh(self) -> None:
+        """The page's built-in refresh button was pressed; wakes the waiting tool call.
+
+        Unlike press there is no page check: a wait only runs while the shown page can send
+        messages, because publishing a page that cannot ends the wait."""
+        with self._changed:
+            if self._state != "waiting":
+                raise CaptureError(NOT_WAITING_MESSAGE)
+            self._answer({"message": "", "via": "refresh"})
+
+    def send_message(self, text: str) -> None:
+        """The user typed a message in the page's message box; wakes the waiting tool call."""
+        text = text.strip()
+        if not text:
+            raise CaptureError(EMPTY_MESSAGE)
+        if len(text) > MAX_MESSAGE_CHARS:
+            raise CaptureError(LONG_MESSAGE)
+        with self._changed:
+            if self._state != "waiting":
+                raise CaptureError(NOT_WAITING_MESSAGE)
+            if self._view is None or not self._view["messageBox"]:
+                raise CaptureError(NO_MESSAGE_BOX_MESSAGE)
+            self._answer({"message": text, "via": "text"})
+
+    def _answer(self, reply: dict) -> None:
+        """Caller holds self._changed."""
+        self._reply = reply
+        self._set_state("thinking")
+
+    def recapture_current(self, recapture: Callable[[Target], Any]) -> Any:
+        """Capture the target of the view on screen again (waits for a click in progress)."""
+        with self._pointer.lock:
+            with self._changed:
+                if self._view is None:
+                    raise CaptureError("表示中のページがありません。先に show_annotated で表示してください。")
+                capture_id = self._view["captureId"]
+            browser = None
+            try:
+                target = self._store.target(capture_id)
+                if target.kind == "monitor":
+                    browser = self._minimize_browser_over(capture_id)
+                return recapture(target)
+            except Exception as error:
+                with self._changed:
+                    self._set_state("error")
+                if isinstance(error, CaptureError):
+                    raise
+                raise CaptureError(f"撮り直しに失敗しました: {error}") from error
+            finally:
+                if browser is not None:
+                    self._control.restore(browser)
+
+    def _minimize_browser_over(self, capture_id: str) -> Any:
+        """Minimize the viewer browser if it covers the shown monitor; its handle when minimized."""
+        browser = self._control.find_window(VIEWER_TITLE_PREFIX)
+        if browser is None:
+            return None
+        _, meta = self._store.get(capture_id)
+        left, top, right, bottom = self._control.window_rect(browser)
+        m_left, m_top = meta["originX"], meta["originY"]
+        m_right, m_bottom = m_left + meta["originalWidth"], m_top + meta["originalHeight"]
+        if not (left < m_right and m_left < right and top < m_bottom and m_top < bottom):
+            return None
+        self._control.minimize(browser)
+        try:
+            time.sleep(self._settle_seconds)
+            if not self._control.is_minimized(browser):
+                raise CaptureError("ブラウザを最小化できなかったため、撮り直せませんでした。")
+        except BaseException:
+            self._control.restore(browser)
+            raise
+        return browser
+
+    def _set_state(self, state: str) -> None:
+        """Caller holds self._changed."""
+        self._state = state
+        self._state_version += 1
+        self._changed.notify_all()
+
     # --- clicking --------------------------------------------------------------------------
 
     def perform_click(self, capture_id: str, x: float, y: float, double: bool) -> None:
         """Click the real screen where (x, y) is on the capture. The page is left as it is."""
-        if not self._operating.acquire(blocking=False):
-            raise CaptureError("ほかの操作を実行中です。終わるまで待ってください。")
-        try:
-            _, meta = self._store.get(capture_id)
-            target = self._store.target(capture_id)
-            if not (0 <= x < meta["imageWidth"] and 0 <= y < meta["imageHeight"]):
-                raise CaptureError("クリック位置が画像の外です。")
-            browser = self._control.find_window(VIEWER_TITLE_PREFIX)
-            if target.kind == "window" and target.id == browser:
-                raise CaptureError(
-                    "表示中のブラウザと同じウィンドウは操作できません。対象のタブを別のウィンドウに分けてください。"
-                )
-            cursor = self._control.cursor_pos()
+        with self._pointer.at(capture_id, x, y, keep_clear="point") as spot:
             try:
-                origin = None
-                if target.kind == "window":
-                    # Bringing the target to the front also lifts it above the browser.
-                    if not self._control.bring_to_front(target.id):
-                        raise CaptureError("対象のウィンドウを前面に出せませんでした。もう一度クリックしてください。")
-                    origin = self._control.window_origin(target.id)
-                screen_x, screen_y = image_to_screen(meta, x, y, origin)
-                if browser is not None and target.kind == "monitor":
-                    left, top, right, bottom = self._control.window_rect(browser)
-                    if left <= screen_x < right and top <= screen_y < bottom:
-                        self._control.minimize(browser)
-                        time.sleep(self._settle_seconds)
-                        if not self._control.is_minimized(browser):
-                            raise CaptureError("ブラウザを最小化できなかったため、クリックしませんでした。")
-                self._control.click(screen_x, screen_y, double)
+                self._control.click(*spot.screen, double)
                 time.sleep(self._after_click_seconds)
             finally:
-                self._control.set_cursor(*cursor)
-                if browser is not None:
-                    self._control.restore(browser)
-        finally:
-            self._operating.release()
+                self._control.set_cursor(*spot.cursor)
 
     # --- used by the request handler -------------------------------------------------------
 
@@ -185,6 +309,22 @@ class Viewer:
             if version > self._acked:
                 self._acked = version
                 self._changed.notify_all()
+
+    def next_update(self, seen_view: int, seen_state: int, timeout: float) -> tuple[dict | None, dict | None]:
+        """(view, state) entries newer than the versions seen, or (None, None) after timeout."""
+        with self._changed:
+
+            def changed() -> bool:
+                newer_view = self._view is not None and self._view["version"] > seen_view
+                return newer_view or self._state_version > seen_state
+
+            if not self._changed.wait_for(changed, timeout=timeout):
+                return None, None
+            view = dict(self._view) if self._view is not None and self._view["version"] > seen_view else None
+            state = (
+                {"version": self._state_version, "state": self._state} if self._state_version > seen_state else None
+            )
+            return view, state
 
     def next_view(self, seen_version: int, timeout: float) -> dict | None:
         """The current view once it is newer than seen_version, or None after timeout."""
@@ -255,6 +395,35 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
                 self._send_json(200, {"ok": True})
             elif path == "/click":
                 self._click(body)
+            elif path == "/press":
+                label = body.get("button")
+                if not isinstance(label, str):
+                    self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                    return
+                try:
+                    viewer.press(label)
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
+            elif path == "/refresh":
+                try:
+                    viewer.refresh()
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
+            elif path == "/message":
+                text = body.get("text")
+                if not isinstance(text, str):
+                    self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                    return
+                try:
+                    viewer.send_message(text)
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
             else:
                 self._send_json(404, {"error": "not found"})
 
@@ -280,15 +449,19 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             viewer.register_client()
             try:
-                seen = 0
+                seen_view = seen_state = 0
                 while True:
-                    view = viewer.next_view(seen, viewer.heartbeat_seconds)
-                    if view is None:
+                    view, state = viewer.next_update(seen_view, seen_state, viewer.heartbeat_seconds)
+                    if view is None and state is None:
                         self.wfile.write(b": ping\n\n")
-                    else:
-                        seen = view["version"]
+                    if view is not None:
+                        seen_view = view["version"]
                         data = json.dumps(view, ensure_ascii=False)
                         self.wfile.write(f"event: view\ndata: {data}\n\n".encode("utf-8"))
+                    if state is not None:
+                        seen_state = state["version"]
+                        data = json.dumps(state, ensure_ascii=False)
+                        self.wfile.write(f"event: state\ndata: {data}\n\n".encode("utf-8"))
                     self.wfile.flush()
             except OSError:
                 pass  # the tab was closed

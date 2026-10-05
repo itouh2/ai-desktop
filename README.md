@@ -19,12 +19,21 @@ uv run pytest
 
 ## Claude Code への登録
 
+このフォルダの `.mcp.json` に登録してあります。Claude Code をこのフォルダで開くと、初回だけ使ってよいかの確認が出るので許可してください。
+
 ```powershell
-claude mcp add --scope user desktop -- uv run --directory C:/Works/2026/ai-desktop ai-desktop
-claude mcp list   # desktop が ✓ Connected になっていれば OK
+claude mcp get ai-desktop   # このフォルダで実行。Scope: Project config と出れば OK
 ```
 
-登録後、Claude Code のセッションを開き直すとツールが使えるようになります。初回は Claude Code の許可確認が出ます（「常に許可」を選ぶと、以降は確認なしで撮影されます）。
+以前ユーザー全体に登録していたら、次のコマンドで消してください（残っていると別のフォルダでも動いてしまいます）：
+
+```powershell
+claude mcp remove ai-desktop -s user
+```
+
+`.mcp.json` の args で `--no-sync` を付けているのは、別の Claude Code セッションの MCP サーバーが動いていても起動できるようにするためです（付けないと、起動時の同期が使用中の `ai-desktop.exe` を書き換えられずに失敗します）。依存関係を変えたときは、すべてのセッションを閉じてから `uv sync` を実行してください。
+
+登録後、Claude Code のセッションを開き直すとツールが使えるようになります。ツールを初めて使うときは、Claude Code の許可確認が出ます（「常に許可」を選ぶと、以降は確認なしで撮影されます）。
 ツールを追加・更新したあとは、Claude Code のセッションを開き直すと反映されます。
 
 ## 使い方の例
@@ -33,6 +42,7 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 - 「Excel のウィンドウを見て、この表の改善点を教えて」
 - 「2番目のモニターに何が映ってる？」
 - 「どこを押せばいいか、画面に印をつけて見せて」（注釈付きのスクショがブラウザに表示されます。ページ上をクリックすると実際の画面もクリックされます）
+- 「手順をボタンで案内して」（ページの「できた」「分からない」などのボタンを押しながら進められます。『更新』を押すと Claude が画面を見直します）
 
 ## ツール
 
@@ -42,7 +52,9 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 | `list_windows` | 表示中のウィンドウ一覧（最小化中も含む。id・タイトル・アプリ・位置とサイズ・最小化中か・アクティブか） |
 | `capture_monitor` | モニター全体を撮影（省略時はプライマリ） |
 | `capture_window` | ウィンドウを撮影（`window_id` か `title` の部分一致） |
-| `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねてブラウザに表示する（撮影メタデータの `captureId` を `capture_id` に指定）。開いているタブは使い回す。ページ上のクリック・ダブルクリックは実際の画面に伝わる（ページは更新されず、注釈は残る） |
+| `show_annotated` | 撮影画像を背景に、Claude が書いた枠・番号・吹き出し・矢印を重ねてブラウザに表示する（撮影メタデータの `captureId` を `capture_id` に指定）。`html` は省略でき、その場合は画像と説明文だけのページになる。開いているタブは使い回す。ページ上のクリック・ダブルクリックは実際の画面に伝わる（ページは更新されず、注釈は残る）。`explanation` を付けると説明文が出る。`buttons`（最大6個）や `message_box`（入力欄。Enter で送信、Shift+Enter で改行）を付けると、ページがユーザーから Claude へメッセージを届ける入口になる。ボタンや入力欄のあるページには『更新』が常に出る |
+| `wait_for_message` | ページからメッセージが届くまで待ち（1回最大110秒）、`{"message": …, "via": "button" か "text" か "refresh"}` と撮り直した画面を返す。時間切れなら `{"message": null}` |
+| `move_mouse` | 撮影画像の 1 点にマウスカーソルを乗せ、`wait_seconds`（0〜5 秒、既定 0.5）待ってから同じウィンドウまたはモニターを撮り直す。ツールチップや説明文など、カーソルを乗せたときだけ出る表示を読むためのもの。クリックはしない。既定でカーソルを元の位置に戻す（`restore_cursor`） |
 
 撮影結果は JPEG（長辺 1568px 以下）と座標メタデータです。画面座標 = `origin + 画像上の座標 ÷ scale`（物理ピクセル）。
 
@@ -57,6 +69,10 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 - ウィンドウを前面に出すために Alt キーを一瞬押すので、まれにアプリのメニューバーが反応することがあります。
 - 管理者権限で動いているアプリは、ページからクリックできません。
 - `show_annotated` のページは外部からの読み込みを遮断していますが、ページ移動（`<meta http-equiv="refresh">` など）は防げません。画面に怪しい指示が映っているときは注意してください。
+- ボタンでのやりとりの間、チャットは「実行中」になります。止めるときは Esc を押してください。
+- ボタンや『更新』で撮り直すのは、表示中の画像と同じウィンドウまたはモニターだけです。別のウィンドウを見てほしいときはチャットで頼んでください。
+- `move_mouse` はユーザーのマウスカーソルを一時的に動かします（既定で元の位置に戻します）。操作中に使うと、操作とぶつかります。
+- ウィンドウ撮影（`capture_window`）には、そのウィンドウの外に別ウィンドウとして出るツールチップは写りません。一般的な Windows アプリのツールチップを読むときは、モニター撮影（`capture_monitor`）の画像に対して `move_mouse` を使ってください（ゲームのように画面の中に描かれる説明文は、ウィンドウ撮影でも写ります）。
 
 ## 実機の動作確認
 
@@ -64,6 +80,9 @@ claude mcp list   # desktop が ✓ Connected になっていれば OK
 uv run python scripts/smoke.py   # smoke-out/ に monitor.png と window.png を保存
 uv run python scripts/control_smoke.py   # クリック・前面化・最小化の確認（試験用ウィンドウが開きます）
 uv run python scripts/e2e_viewer.py      # タブの再利用とページ経由のクリックの確認（ブラウザのタブが開きます）
+uv run python scripts/e2e_move_mouse.py  # move_mouse の確認（試験用ウィンドウが開きます。実行中はマウスに触らない）
 ```
+
+アプリやゲームごとの知見は `notes/` にたまります（索引は [notes/README.md](notes/README.md)）。
 
 設計の詳細は [docs/superpowers/specs/2026-10-03-desktop-vision-mcp-design.md](docs/superpowers/specs/2026-10-03-desktop-vision-mcp-design.md) を参照してください。

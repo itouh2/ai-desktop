@@ -38,6 +38,14 @@ def test_oldest_capture_is_evicted_past_limit():
     assert store.get("c4") == (bytes([3]), {"captureId": "c4"})
 
 
+def test_default_limit_keeps_the_latest_20():
+    store = CaptureStore()
+    ids = [store.add(bytes([i]), {}) for i in range(21)]
+    with pytest.raises(CaptureError):
+        store.get(ids[0])
+    assert store.get(ids[1])[1] == {"captureId": "c2"}
+
+
 def test_unknown_id_lists_available_ids():
     store = CaptureStore()
     store.add(b"a", {})

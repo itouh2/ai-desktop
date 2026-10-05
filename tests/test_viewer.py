@@ -6,79 +6,11 @@ import urllib.error
 import urllib.request
 
 import pytest
+from fakes import BROWSER, FakeControl
 
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta
 from ai_desktop.viewer import TOKEN_HEADER, Viewer
-
-BROWSER = 777
-
-
-class FakeControl:
-    """Records every control call in order instead of touching the real desktop."""
-
-    def __init__(
-        self,
-        browser=BROWSER,
-        origin=(100, 200),
-        fail_origin=False,
-        front_ok=True,
-        browser_rect=(0, 0, 1000, 1000),
-        minimize_ok=True,
-        fail_rect=False,
-    ):
-        self.calls = []
-        self.times = {}
-        self.minimize_ok = minimize_ok
-        self.fail_rect = fail_rect
-        self.browser_rect = browser_rect
-        self.front_ok = front_ok
-        self.browser = browser
-        self.origin = origin
-        self.fail_origin = fail_origin
-
-    def find_window(self, fragment):
-        self.calls.append(("find_window", fragment))
-        return self.browser
-
-    def cursor_pos(self):
-        self.calls.append(("cursor_pos",))
-        return (5, 6)
-
-    def minimize(self, hwnd):
-        self.calls.append(("minimize", hwnd))
-
-    def is_minimized(self, hwnd):
-        self.calls.append(("is_minimized", hwnd))
-        return self.minimize_ok
-
-    def bring_to_front(self, hwnd):
-        self.calls.append(("bring_to_front", hwnd))
-        return self.front_ok
-
-    def window_origin(self, hwnd):
-        self.calls.append(("window_origin", hwnd))
-        if self.fail_origin:
-            raise CaptureError("操作対象のウィンドウが見つかりません。撮影し直してください。")
-        return self.origin
-
-    def window_rect(self, hwnd):
-        self.calls.append(("window_rect", hwnd))
-        if self.fail_rect:
-            raise CaptureError("ブラウザのウィンドウの位置を取得できませんでした。")
-        return self.browser_rect
-
-    def click(self, x, y, double):
-        self.calls.append(("click", x, y, double))
-        self.times["click"] = time.monotonic()
-
-    def set_cursor(self, x, y):
-        self.calls.append(("set_cursor", x, y))
-        self.times["set_cursor"] = time.monotonic()
-
-    def restore(self, hwnd):
-        self.calls.append(("restore", hwnd))
-
 
 MONITOR_META = build_meta("monitor:1 DISPLAY1", 0, 0, (3200, 1600), (1568, 784), 0.49)
 WINDOW_META = build_meta("window:42 Book1 - Excel", -100, 50, (800, 600), (800, 600), 1.0)
@@ -114,6 +46,7 @@ def test_click_on_window_capture_follows_the_window(viewer, control):
     assert control.calls == [
         ("find_window", "ai-desktop | "),
         ("cursor_pos",),
+        ("foreground_window",),
         ("bring_to_front", 42),
         ("window_origin", 42),
         ("click", 110, 220, False),
@@ -148,16 +81,16 @@ def test_click_is_skipped_when_the_browser_cannot_be_minimized(viewer, control):
     control.minimize_ok = False
     with pytest.raises(CaptureError, match="最小化できなかった"):
         viewer.perform_click("c1", 49, 98, False)
-    assert not any(call[0] == "click" for call in control.calls)
-    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
 
 
 def test_failed_browser_rect_still_restores(viewer, control):
     control.fail_rect = True
     with pytest.raises(CaptureError, match="位置を取得できませんでした"):
         viewer.perform_click("c1", 49, 98, False)
-    assert not any(call[0] == "click" for call in control.calls)
-    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
 
 
 def test_monitor_click_beside_the_browser_does_not_minimize_it(viewer, control):
@@ -172,15 +105,26 @@ def test_failed_click_still_restores_cursor_and_browser(viewer, control):
     control.fail_origin = True
     with pytest.raises(CaptureError, match="操作対象のウィンドウが見つかりません"):
         viewer.perform_click("c2", 10, 20, False)
-    assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
-    assert not any(call[0] == "click" for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
 
 
 def test_click_is_skipped_when_the_target_cannot_be_brought_to_front(viewer, control):
     control.front_ok = False
     with pytest.raises(CaptureError, match="前面に出せませんでした"):
         viewer.perform_click("c2", 10, 20, False)
-    assert not any(call[0] == "click" for call in control.calls)
+    assert not any(call[0] in ("click", "set_cursor") for call in control.calls)
+    assert control.calls[-1] == ("restore", BROWSER)
+
+
+def test_click_that_fails_after_moving_restores_the_cursor(viewer, control, monkeypatch):
+    def broken_click(x, y, double):
+        control.calls.append(("click", x, y, double))
+        raise CaptureError("入力を送れませんでした（Win32 エラー 5）。")
+
+    monkeypatch.setattr(control, "click", broken_click)
+    with pytest.raises(CaptureError, match="入力を送れませんでした"):
+        viewer.perform_click("c2", 10, 20, False)
     assert control.calls[-2:] == [("set_cursor", 5, 6), ("restore", BROWSER)]
 
 
@@ -198,12 +142,12 @@ def test_click_on_the_viewer_browser_itself_is_rejected(viewer, control):
 
 
 def test_only_one_operation_at_a_time(viewer):
-    viewer._operating.acquire()
+    viewer._pointer.lock.acquire()
     try:
         with pytest.raises(CaptureError, match="ほかの操作を実行中"):
             viewer.perform_click("c2", 10, 20, False)
     finally:
-        viewer._operating.release()
+        viewer._pointer.lock.release()
 
 
 # --- HTTP ------------------------------------------------------------------------------------
@@ -291,9 +235,12 @@ def test_publish_reaches_an_open_tab_that_acknowledges(viewer):
         connection.request("GET", f"/events?t={viewer.token}")
         response = connection.getresponse()
         connected.set()
+        event = None
         while len(received) < 1:
             line = response.fp.readline().decode("utf-8")
-            if line.startswith("data: "):
+            if line.startswith("event: "):
+                event = line[len("event: "):].strip()
+            elif line.startswith("data: ") and event == "view":
                 view = json.loads(line[len("data: "):])
                 received.append(view)
                 post(viewer, "/ack", {"version": view["version"]})
@@ -347,3 +294,322 @@ def test_ack_with_a_malformed_body_is_a_bad_request(viewer):
     viewer.ensure_started()
     assert post(viewer, "/ack", [1])[0] == 400
     assert post(viewer, "/ack", {"version": "x"})[0] == 400
+
+
+# --- page messages: buttons ------------------------------------------------------------------
+
+
+def wait_in_background(viewer, timeout=5.0):
+    """Start wait_for_message on a thread; returns (thread, results list)."""
+    results = []
+    thread = threading.Thread(target=lambda: results.append(viewer.wait_for_message(timeout)), daemon=True)
+    thread.start()
+    for _ in range(100):  # until the viewer is waiting
+        if viewer._state == "waiting":
+            break
+        time.sleep(0.01)
+    return thread, results
+
+
+def test_publish_carries_explanation_and_buttons(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "説明" * 2500, ["できた", "分からない"])
+    view = viewer.next_view(0, 0)
+    assert view["explanation"] == ("説明" * 2500)[:4000]
+    assert view["buttons"] == ["できた", "分からない"]
+
+
+def test_press_without_a_waiter_is_rejected(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.press("できた")
+    assert viewer._state == "idle"
+
+
+def test_wait_requires_a_page_with_buttons(viewer):
+    with pytest.raises(CaptureError, match="表示中のページがありません"):
+        viewer.wait_for_message(1)
+    viewer.publish("c2", "<div></div>", "Excel")
+    with pytest.raises(CaptureError, match="入口がありません"):
+        viewer.wait_for_message(1)
+
+
+def test_pressing_a_shown_button_wakes_the_waiter(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた", "分からない"])
+    thread, results = wait_in_background(viewer)
+    with pytest.raises(CaptureError, match="使えません"):
+        viewer.press("やめる")
+    viewer.press("分からない")
+    thread.join(5)
+    assert results == [{"message": "分からない", "via": "button"}]
+    assert viewer._state == "thinking"
+
+
+def test_wait_times_out_back_to_idle(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert viewer.wait_for_message(0.05) is None
+    assert viewer._state == "idle"
+
+
+def test_a_newer_wait_cancels_the_older_one(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    first, first_results = wait_in_background(viewer)
+    second, second_results = wait_in_background(viewer)
+    first.join(5)
+    assert first_results == [None]
+    viewer.press("できた")
+    second.join(5)
+    assert second_results == [{"message": "できた", "via": "button"}]
+
+
+def test_failed_recapture_sets_error_until_the_next_page(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+
+    def failing(target):
+        assert target == Target("window", 42)
+        raise CaptureError("ウィンドウが閉じられました")
+
+    with pytest.raises(CaptureError):
+        viewer.recapture_current(failing)
+    assert viewer._state == "error"
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert viewer._state == "idle"
+
+
+def test_recapture_current_uses_the_shown_target(viewer):
+    viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+    assert viewer.recapture_current(lambda target: target) == Target("monitor", 1)
+
+
+def test_monitor_recapture_moves_the_browser_out_of_the_way(viewer, control):
+    viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+    assert viewer.recapture_current(lambda target: "shot") == "shot"
+    calls = [call for call in control.calls if call[0] in ("minimize", "is_minimized", "restore")]
+    assert calls == [("minimize", BROWSER), ("is_minimized", BROWSER), ("restore", BROWSER)]
+
+
+def test_monitor_recapture_leaves_a_browser_on_another_monitor(viewer, control):
+    control.browser_rect = (3840, 0, 7680, 2160)
+    viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+    assert viewer.recapture_current(lambda target: "shot") == "shot"
+    assert not [call for call in control.calls if call[0] == "minimize"]
+
+
+def test_window_recapture_does_not_touch_the_browser(viewer, control):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert viewer.recapture_current(lambda target: "shot") == "shot"
+    assert not [call for call in control.calls if call[0] == "find_window"]
+
+
+def test_monitor_recapture_aborts_when_the_browser_will_not_minimize(store):
+    control = FakeControl(minimize_ok=False)
+    viewer = Viewer(store, control, settle_seconds=0, after_click_seconds=0, ack_timeout=1.0)
+    try:
+        viewer.publish("c1", "<div></div>", "Monitor", "", ["できた"])
+        recapture_calls = []
+        with pytest.raises(CaptureError, match="最小化できなかった"):
+            viewer.recapture_current(lambda target: recapture_calls.append(target))
+        assert recapture_calls == []
+        assert ("restore", BROWSER) in control.calls
+        assert viewer._state == "error"
+    finally:
+        viewer.close()
+
+
+def test_unexpected_recapture_failure_becomes_a_capture_error(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+
+    def failing(target):
+        raise OSError("boom")
+
+    with pytest.raises(CaptureError, match="撮り直しに失敗しました"):
+        viewer.recapture_current(failing)
+    assert viewer._state == "error"
+
+
+def test_publishing_without_buttons_ends_a_wait(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    for _ in range(100):
+        if viewer._state == "waiting":
+            break
+        time.sleep(0.02)
+    viewer.publish("c2", "<div></div>", "Excel", "", None)
+    thread.join(5)
+    assert results == [None]
+    assert viewer._state == "idle"
+
+
+def test_publishing_after_a_press_leaves_the_thinking_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    for _ in range(100):
+        if viewer._state == "waiting":
+            break
+        time.sleep(0.02)
+    viewer.press("できた")
+    thread.join(5)
+    assert viewer._state == "thinking"
+    viewer.publish("c2", "<div></div>", "Excel")
+    assert viewer._state == "idle"
+
+
+def test_press_with_a_wrong_host_is_forbidden(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    body = json.dumps({"button": "できた"}, ensure_ascii=False).encode("utf-8")
+    connection = http.client.HTTPConnection("127.0.0.1", int(viewer.origin.rsplit(":", 1)[1]), timeout=5)
+    connection.putrequest("POST", "/press", skip_host=True)
+    connection.putheader("Host", "evil.example:80")
+    connection.putheader(TOKEN_HEADER, viewer.token)
+    connection.putheader("Origin", viewer.origin)
+    connection.putheader("Content-Type", "application/json")
+    connection.putheader("Content-Length", str(len(body)))
+    connection.endheaders(body)
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    assert response.status == 403
+
+
+def test_press_endpoint_checks_auth_and_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert post(viewer, "/press", {"button": "できた"}, token="wrong")[0] == 403
+    assert post(viewer, "/press", {"button": "できた"}, origin="https://example.com")[0] == 403
+    status, result = post(viewer, "/press", {"button": "できた"})
+    assert status == 200 and "待ち受けていません" in result["error"]
+    assert post(viewer, "/press", {"button": 1})[0] == 400
+    thread, results = wait_in_background(viewer)
+    assert post(viewer, "/press", {"button": "できた"}) == (200, {"ok": True})
+    thread.join(5)
+    assert results == [{"message": "できた", "via": "button"}]
+
+
+def test_events_send_the_state_right_after_connecting(viewer):
+    viewer.ensure_started()
+    connection = http.client.HTTPConnection("127.0.0.1", int(viewer.origin.rsplit(":", 1)[1]), timeout=5)
+    connection.request("GET", f"/events?t={viewer.token}")
+    response = connection.getresponse()
+    lines = [response.fp.readline().decode("utf-8").strip() for _ in range(2)]
+    connection.close()
+    assert lines[0] == "event: state"
+    assert json.loads(lines[1][len("data: "):])["state"] == "idle"
+
+
+# --- page messages: message box --------------------------------------------------------------
+
+
+def test_publish_carries_the_message_box_flag(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", None, True)
+    assert viewer.next_view(0, 0)["messageBox"] is True
+    viewer.publish("c2", "<div></div>", "Excel")
+    assert viewer.next_view(1, 0)["messageBox"] is False
+
+
+def test_a_message_box_alone_is_enough_to_wait(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", None, True)
+    thread, results = wait_in_background(viewer)
+    viewer.send_message("  ブラー+ を引いた\n次は？  ")
+    thread.join(5)
+    assert results == [{"message": "ブラー+ を引いた\n次は？", "via": "text"}]
+    assert viewer._state == "thinking"
+
+
+def test_a_page_without_a_message_box_rejects_typed_messages(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    with pytest.raises(CaptureError, match="入力欄を使えません"):
+        viewer.send_message("こんにちは")
+    viewer.press("できた")
+    thread.join(5)
+    assert results == [{"message": "できた", "via": "button"}]
+
+
+def test_message_without_a_waiter_is_rejected(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"], True)
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.send_message("こんにちは")
+
+
+@pytest.mark.parametrize("text, message", [("   ", "空です"), ("あ" * 1001, "1000 文字まで")])
+def test_empty_or_long_messages_are_rejected(viewer, text, message):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"], True)
+    thread, results = wait_in_background(viewer)
+    with pytest.raises(CaptureError, match=message):
+        viewer.send_message(text)
+    assert viewer._state == "waiting"
+    viewer.send_message("あ" * 1000)
+    thread.join(5)
+    assert results == [{"message": "あ" * 1000, "via": "text"}]
+
+
+def test_publishing_without_any_way_to_send_ends_a_wait(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", None, True)
+    thread, results = wait_in_background(viewer)
+    viewer.publish("c2", "<div></div>", "Excel")
+    thread.join(5)
+    assert results == [None]
+    assert viewer._state == "idle"
+
+
+def test_message_endpoint_checks_auth_and_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"], True)
+    assert post(viewer, "/message", {"text": "やあ"}, token="wrong")[0] == 403
+    assert post(viewer, "/message", {"text": "やあ"}, origin="https://example.com")[0] == 403
+    status, result = post(viewer, "/message", {"text": "やあ"})
+    assert status == 200 and "待ち受けていません" in result["error"]
+    assert post(viewer, "/message", {"text": 1})[0] == 400
+    thread, results = wait_in_background(viewer)
+    assert post(viewer, "/message", {"text": "あ" * 1000}) == (200, {"ok": True})
+    thread.join(5)
+    assert results == [{"message": "あ" * 1000, "via": "text"}]
+
+
+# --- page messages: refresh ------------------------------------------------------------------
+
+
+def test_refresh_wakes_the_waiter(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    viewer.refresh()
+    thread.join(5)
+    assert results == [{"message": "", "via": "refresh"}]
+    assert viewer._state == "thinking"
+
+
+def test_refresh_without_a_waiter_is_refused(viewer):
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+
+
+def test_a_second_refresh_before_the_next_wait_is_refused(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    viewer.refresh()
+    thread.join(5)
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+    assert results == [{"message": "", "via": "refresh"}]
+
+
+def test_refresh_after_the_page_lost_its_inputs_is_refused(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    thread, results = wait_in_background(viewer)
+    viewer.publish("c2", "", "Excel")
+    thread.join(5)
+    assert results == [None]
+    with pytest.raises(CaptureError, match="待ち受けていません"):
+        viewer.refresh()
+
+
+def test_refresh_endpoint_checks_auth_and_state(viewer):
+    viewer.publish("c2", "<div></div>", "Excel", "", ["できた"])
+    assert post(viewer, "/refresh", {}, token="wrong")[0] == 403
+    assert post(viewer, "/refresh", {}, origin="https://example.com")[0] == 403
+    status, result = post(viewer, "/refresh", {})
+    assert status == 200 and "待ち受けていません" in result["error"]
+    thread, results = wait_in_background(viewer)
+    assert post(viewer, "/refresh", {}) == (200, {"ok": True})
+    thread.join(5)
+    assert results == [{"message": "", "via": "refresh"}]

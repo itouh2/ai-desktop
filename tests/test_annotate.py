@@ -39,3 +39,47 @@ def test_clicks_on_notes_and_badges_are_not_forwarded():
     assert 'event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")' in page
     assert "吹き出しや番号の上はクリックしても送信しません" in page
     assert ".box" not in page.split('event.target.closest("')[1].split('")')[0]
+
+
+def test_viewer_shell_has_button_bar_and_explanation_panel():
+    page = render_shell("n0nce")
+    assert (
+        '<div id="bar" hidden><button id="refresh" type="button">更新</button>'
+        '<span id="buttons"></span><span id="bar-state"></span>'
+    ) in page
+    assert '<aside id="side" hidden></aside>' in page
+    assert "button.textContent = label;" in page
+    assert 'side.textContent = next.explanation || "";' in page
+    assert 'post("/press", {button: label})' in page
+    assert 'events.addEventListener("state"' in page
+
+
+def test_viewer_shell_has_a_builtin_refresh_button():
+    page = render_shell("n0nce")
+    assert (
+        '<div id="bar" hidden><button id="refresh" type="button">更新</button>'
+        '<span id="buttons"></span><span id="bar-state"></span>'
+    ) in page
+    assert 'post("/refresh", {})' in page
+    assert 'document.getElementById("refresh").addEventListener("click", refresh);' in page
+    assert 'document.getElementById("refresh").disabled = !enabled;' in page
+    assert "#bar #refresh {" in page
+
+
+def test_viewer_shell_reads_top_to_bottom_image_explanation_then_replies():
+    page = render_shell("n0nce")
+    body = page.split("<body>")[1]
+    assert body.index('id="viewport"') < body.index('id="side"') < body.index('id="bar"')
+    # The image shrinks to leave room for the explanation and the reply bar below it.
+    assert "innerHeight" in page.split("function fit()")[1].split("}\n")[0]
+
+
+def test_viewer_shell_has_a_message_box_that_sends_on_enter():
+    page = render_shell("n0nce")
+    assert '<div id="compose" hidden><textarea id="message" rows="1" maxlength="1000"' in page
+    assert 'document.getElementById("compose").hidden = !messageBox;' in page
+    assert '<button id="send" type="button">送信</button>' in page
+    assert 'post("/message", {text: text})' in page
+    # Shift+Enter and the Enter that confirms an IME conversion must not send.
+    assert 'event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229' in page
+    assert "event.preventDefault();\n    sendMessage();" in page

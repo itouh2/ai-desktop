@@ -31,6 +31,8 @@ _ARROWHEAD = (
 )
 
 VIEWER_TITLE_PREFIX = "ai-desktop | "
+MAX_MESSAGE_CHARS = 1000
+REFRESH_LABEL = "更新"  # the page's built-in refresh button; reserved, so Claude's buttons cannot use it
 
 _VIEWER_CSS = """
 #stage { cursor: crosshair; }
@@ -39,6 +41,24 @@ _VIEWER_CSS = """
   font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
 #status.show { display: block; }
 #status.error { background: #e5484d; }
+#layout { display: flex; flex-direction: column; }
+#viewport { margin: 0 auto; }
+#side { box-sizing: border-box; max-height: 30vh; overflow-y: auto; padding: 12px 16px; color: #eee;
+  border-top: 1px solid #333; font: 15px/1.7 system-ui, "Yu Gothic UI", sans-serif; white-space: pre-wrap; }
+#bar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 12px; background: #2a2a2a; font: 14px system-ui, "Yu Gothic UI", sans-serif; }
+#bar[hidden], #side[hidden], #compose[hidden] { display: none; }
+#bar button { padding: 6px 14px; border: 0; border-radius: 6px; background: #e5484d; color: #fff;
+  font: inherit; font-weight: 700; cursor: pointer; }
+#bar button:disabled { background: #555; color: #aaa; cursor: default; }
+#bar #refresh { background: transparent; border: 1px solid #888; color: #ddd; }
+#bar #refresh:disabled { border-color: #555; color: #777; }
+#bar-state { margin-left: auto; color: #ccc; }
+#compose { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
+#message { flex: 1; box-sizing: border-box; min-height: 36px; max-height: 160px; padding: 6px 10px;
+  border: 1px solid #555; border-radius: 6px; background: #1e1e1e; color: #eee; resize: none;
+  font: inherit; line-height: 1.5; }
+#message:focus { outline: 2px solid #e5484d; outline-offset: -1px; }
 """
 
 # The live viewer: receives views over SSE, scales the stage, and posts clicks back.
@@ -48,12 +68,110 @@ let view = null;
 let busy = false;
 let pending = null;
 let statusTimer = null;
+let buttonState = "idle";
+let sending = false;
+const STATE_TEXT = {
+  waiting: "",
+  thinking: "考え中…",
+  idle: "Claude が待ち受けると送れます",
+  error: "撮影できませんでした。チャットを確認してください",
+};
 
 function fit() {
   if (!view) return;
-  const scale = document.documentElement.clientWidth / view.width;
+  // Read top to bottom: the image takes what the explanation and the reply bar below leave free.
+  const viewport = document.getElementById("viewport");
+  const below = document.getElementById("side").offsetHeight + document.getElementById("bar").offsetHeight;
+  const room = Math.max(240, innerHeight - below);
+  const scale = Math.min(document.getElementById("layout").clientWidth / view.width, room / view.height);
   document.getElementById("stage").style.transform = "scale(" + scale + ")";
-  document.getElementById("viewport").style.height = view.height * scale + "px";
+  viewport.style.width = view.width * scale + "px";
+  viewport.style.height = view.height * scale + "px";
+}
+
+function renderButtons() {
+  const labels = view ? view.buttons : [];
+  const messageBox = Boolean(view && view.messageBox);
+  document.getElementById("bar").hidden = labels.length === 0 && !messageBox;
+  document.getElementById("compose").hidden = !messageBox;
+  document.getElementById("buttons").replaceChildren(...labels.map((label) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => press(label));
+    return button;
+  }));
+  syncControls();
+  document.getElementById("bar-state").textContent = STATE_TEXT[buttonState] || "";
+  fit();
+}
+
+function syncControls() {
+  const enabled = buttonState === "waiting" && !sending;
+  for (const button of document.querySelectorAll("#buttons button")) button.disabled = !enabled;
+  document.getElementById("refresh").disabled = !enabled;
+  document.getElementById("send").disabled = !enabled;
+}
+
+function fitMessage() {
+  const input = document.getElementById("message");
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight + 2, 160) + "px";
+  fit();
+}
+
+async function sendMessage() {
+  const input = document.getElementById("message");
+  const text = input.value.trim();
+  if (!text || sending) return;
+  if (buttonState !== "waiting") {
+    document.getElementById("bar-state").textContent = "Claude が待ち受けると送れます";
+    return;
+  }
+  sending = true;
+  syncControls();
+  try {
+    const response = await post("/message", {text: text});
+    const result = await response.json();
+    if (result.error) {
+      document.getElementById("bar-state").textContent = result.error;
+    } else {
+      input.value = "";
+      fitMessage();
+    }
+  } catch (error) {
+    document.getElementById("bar-state").textContent = "送信できませんでした: " + error;
+  } finally {
+    sending = false;
+    syncControls();
+  }
+}
+
+// Runs send, the POST of a reply to Claude (a button or 更新). The caller has already switched its
+// control off, and it stays off until Claude's state changes; if the server refuses the reply or
+// sending fails, the controls come back and the reason is shown.
+async function sendReply(send) {
+  try {
+    const response = await send();
+    const result = await response.json();
+    if (result.error) {
+      renderButtons();
+      document.getElementById("bar-state").textContent = result.error;
+    }
+  } catch (error) {
+    renderButtons();
+    document.getElementById("bar-state").textContent = "送信できませんでした: " + error;
+  }
+}
+
+function press(label) {
+  for (const button of document.querySelectorAll("#buttons button")) button.disabled = true;
+  return sendReply(() => post("/press", {button: label}));
+}
+
+function refresh() {
+  document.getElementById("refresh").disabled = true;
+  return sendReply(() => post("/refresh", {}));
 }
 
 function status(text, isError) {
@@ -72,6 +190,10 @@ function render(next) {
   document.getElementById("shot").src =
     "/image/" + encodeURIComponent(next.captureId) + "?t=" + encodeURIComponent(token);
   document.getElementById("annotations").innerHTML = next.html;
+  const side = document.getElementById("side");
+  side.textContent = next.explanation || "";
+  side.hidden = !next.explanation;
+  renderButtons();
   status("", false);
   fit();
 }
@@ -109,6 +231,16 @@ async function operate(event, double) {
 }
 
 addEventListener("DOMContentLoaded", () => {
+  const input = document.getElementById("message");
+  input.addEventListener("keydown", (event) => {
+    // Enter sends, Shift+Enter breaks the line; Enter that confirms an IME conversion does neither.
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    sendMessage();
+  });
+  input.addEventListener("input", fitMessage);
+  document.getElementById("send").addEventListener("click", sendMessage);
+  document.getElementById("refresh").addEventListener("click", refresh);
   document.getElementById("stage").addEventListener("click", (event) => {
     clearTimeout(pending);
     if (event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")) {
@@ -127,6 +259,10 @@ addEventListener("DOMContentLoaded", () => {
     const next = JSON.parse(event.data);
     render(next);
     post("/ack", {version: next.version});
+  });
+  events.addEventListener("state", (event) => {
+    buttonState = JSON.parse(event.data).state;
+    renderButtons();
   });
   events.addEventListener("error", () => {
     status("サーバーとの接続が切れました。Claude Code のセッションを確認してください。", true);
@@ -155,9 +291,17 @@ def render_shell(nonce: str) -> str:
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
+        '<div id="layout">\n'
         '<div id="viewport"><div id="stage">'
         '<img id="shot" alt="">'
         '<div id="annotations"></div>'
         "</div></div>\n"
+        '<aside id="side" hidden></aside>\n'
+        f'<div id="bar" hidden><button id="refresh" type="button">{REFRESH_LABEL}</button>'
+        '<span id="buttons"></span><span id="bar-state"></span>'
+        f'<div id="compose" hidden><textarea id="message" rows="1" maxlength="{MAX_MESSAGE_CHARS}" '
+        'placeholder="メッセージ（Enter で送信、Shift+Enter で改行）"></textarea>'
+        '<button id="send" type="button">送信</button></div></div>\n'
+        "</div>\n"
         "</body></html>\n"
     )
