@@ -87,10 +87,42 @@ def test_viewer_shell_has_a_message_box_that_sends_on_enter():
 
 def test_page_has_the_agent_toggle():
     page = render_shell("n0nce")
-    assert '<input id="agent-on" type="checkbox">' in page
+    assert '<div id="agent"><label><input type="checkbox"> ' in page
     assert "Claude に操作を任せる（このウィンドウだけ・左クリック）" in page
     assert 'post("/agent", {enabled:' in page
     assert '<ol id="agent-log"></ol>' in page
+
+
+def test_agent_checkbox_has_no_id_a_label_could_target():
+    page = render_shell("n0nce")
+    assert 'id="agent-on"' not in page
+    checkbox = page.split('<div id="agent"><label>')[1].split(">")[0]
+    assert checkbox == '<input type="checkbox"'
+    # The panel's elements are taken once at startup, before any annotation HTML is on the page.
+    assert 'agentOn = document.querySelector("#agent input");' in page
+    render_agent = page.split("function renderAgent()")[1].split("\n}\n")[0]
+    assert "getElementById" not in render_agent
+
+
+def test_annotation_labels_lose_their_for_attribute():
+    page = render_shell("n0nce")
+    render = page.split("function render(next)")[1].split("\n}\n")[0]
+    assert 'querySelectorAll("#annotations label[for]")' in render
+    assert 'removeAttribute("for")' in render
+    assert render.index(".innerHTML = next.html") < render.index('removeAttribute("for")')
+
+
+def test_annotation_style_sheets_are_removed():
+    page = render_shell("n0nce")
+    render = page.split("function render(next)")[1].split("\n}\n")[0]
+    assert 'querySelectorAll("#annotations style")' in render
+    assert render.index(".innerHTML = next.html") < render.index("sheet.remove()")
+
+
+def test_annotations_cannot_paint_over_the_agent_panel():
+    page = render_shell("n0nce")
+    rule = page.split("#annotations {")[1].split("}")[0]
+    assert "isolation: isolate;" in rule
 
 
 def test_agent_log_is_written_as_text():
@@ -109,4 +141,4 @@ def test_agent_toggle_shows_its_state_and_refuses_monitor_captures():
 
 def test_agent_toggle_can_always_be_switched_off():
     page = render_shell("n0nce")
-    assert "checkbox.disabled = monitor && !agent.enabled;" in page
+    assert "agentOn.disabled = monitor && !agent.enabled;" in page

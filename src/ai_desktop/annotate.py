@@ -8,7 +8,8 @@ html { overflow-y: scroll; }
 #viewport { position: relative; width: 100%; overflow: hidden; }
 #stage { position: relative; transform-origin: 0 0; }
 #shot { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-#annotations { position: absolute; inset: 0; font-family: system-ui, "Yu Gothic UI", sans-serif; }
+#annotations { position: absolute; inset: 0; isolation: isolate;
+  font-family: system-ui, "Yu Gothic UI", sans-serif; }
 #annotations .box { position: absolute; box-sizing: border-box; border: 3px solid #e5484d;
   border-radius: 6px; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7); }
 #annotations .badge { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px;
@@ -79,6 +80,12 @@ let statusTimer = null;
 let buttonState = "idle";
 let sending = false;
 let agent = {enabled: false, clicks: []};
+// The permission panel's elements, taken once at startup before any annotation HTML is on the page,
+// so nothing drawn later can stand in for them.
+let agentPanel = null;
+let agentOn = null;
+let agentNote = null;
+let agentLog = null;
 const STATE_TEXT = {
   waiting: "",
   thinking: "考え中…",
@@ -121,14 +128,13 @@ function renderButtons() {
 // the user can always take it back.
 function renderAgent() {
   const monitor = Boolean(view && view.target === "monitor");
-  const checkbox = document.getElementById("agent-on");
-  checkbox.checked = agent.enabled;
-  checkbox.disabled = monitor && !agent.enabled;
-  document.getElementById("agent").classList.toggle("on", agent.enabled);
-  document.getElementById("agent-note").textContent = monitor
+  agentOn.checked = agent.enabled;
+  agentOn.disabled = monitor && !agent.enabled;
+  agentPanel.classList.toggle("on", agent.enabled);
+  agentNote.textContent = monitor
     ? "画面全体の撮影ではクリックを任せられません"
     : (agent.enabled ? "操作を任せています" : "");
-  document.getElementById("agent-log").replaceChildren(...agent.clicks.map((record) => {
+  agentLog.replaceChildren(...agent.clicks.map((record) => {
     const item = document.createElement("li");
     item.textContent = record.time + " " + record.what;
     return item;
@@ -235,6 +241,10 @@ function render(next) {
   document.getElementById("shot").src =
     "/image/" + encodeURIComponent(next.captureId) + "?t=" + encodeURIComponent(token);
   document.getElementById("annotations").innerHTML = next.html;
+  // Annotation HTML must not reach the page's own controls: a label could point at one and a style
+  // sheet could move one under the user's next click, so neither is kept.
+  for (const label of document.querySelectorAll("#annotations label[for]")) label.removeAttribute("for");
+  for (const sheet of document.querySelectorAll("#annotations style")) sheet.remove();
   const side = document.getElementById("side");
   side.textContent = next.explanation || "";
   side.hidden = !next.explanation;
@@ -277,6 +287,10 @@ async function operate(event, double) {
 }
 
 addEventListener("DOMContentLoaded", () => {
+  agentPanel = document.getElementById("agent");
+  agentOn = document.querySelector("#agent input");
+  agentNote = document.getElementById("agent-note");
+  agentLog = document.getElementById("agent-log");
   const input = document.getElementById("message");
   input.addEventListener("keydown", (event) => {
     // Enter sends, Shift+Enter breaks the line; Enter that confirms an IME conversion does neither.
@@ -287,7 +301,6 @@ addEventListener("DOMContentLoaded", () => {
   input.addEventListener("input", fitMessage);
   document.getElementById("send").addEventListener("click", sendMessage);
   document.getElementById("refresh").addEventListener("click", refresh);
-  const agentOn = document.getElementById("agent-on");
   agentOn.addEventListener("change", () => setAgent(agentOn.checked));
   renderAgent();
   document.getElementById("stage").addEventListener("click", (event) => {
@@ -343,7 +356,7 @@ def render_shell(nonce: str) -> str:
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
-        '<div id="agent"><label><input id="agent-on" type="checkbox"> '
+        '<div id="agent"><label><input type="checkbox"> '
         "Claude に操作を任せる（このウィンドウだけ・左クリック）</label>"
         '<div id="agent-note"></div><ol id="agent-log"></ol></div>\n'
         '<div id="layout">\n'
