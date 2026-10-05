@@ -1,5 +1,6 @@
 import http.client
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -613,3 +614,123 @@ def test_refresh_endpoint_checks_auth_and_state(viewer):
     assert post(viewer, "/refresh", {}) == (200, {"ok": True})
     thread.join(5)
     assert results == [{"message": "", "via": "refresh"}]
+
+
+# --- Claude's clicks: permission and records ----------------------------------------------
+
+
+def test_agent_is_off_until_the_page_turns_it_on(viewer):
+    viewer.publish("c2", "", "Excel")
+    with pytest.raises(CaptureError, match="オフです"):
+        viewer.authorize_click("c2")
+    viewer.set_agent(True)
+    viewer.authorize_click("c2")  # no error
+
+
+def test_authorize_needs_a_shown_page(viewer):
+    viewer.set_agent(True)
+    with pytest.raises(CaptureError, match="表示中のページがありません"):
+        viewer.authorize_click("c2")
+
+
+def test_authorize_refuses_monitor_captures(viewer):
+    viewer.publish("c1", "", "Display")
+    viewer.set_agent(True)
+    with pytest.raises(CaptureError, match="画面全体の撮影ではクリックできません"):
+        viewer.authorize_click("c1")
+
+
+def test_authorize_allows_a_newer_capture_of_the_shown_window(viewer, store):
+    newer = store.add(b"window-jpeg", WINDOW_META, Target("window", 42))
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True)
+    viewer.authorize_click(newer)  # no error
+
+
+def test_authorize_refuses_another_window(viewer, store):
+    other = store.add(b"window-jpeg", WINDOW_META, Target("window", 43))
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True)
+    with pytest.raises(CaptureError, match="表示中のウィンドウだけ"):
+        viewer.authorize_click(other)
+
+
+def test_authorize_follows_the_page_that_is_shown_now(viewer):
+    viewer.publish("c2", "", "Excel")
+    viewer.set_agent(True)
+    viewer.publish("c1", "", "Display")  # the page now shows the whole monitor
+    with pytest.raises(CaptureError, match="表示中のウィンドウだけ"):
+        viewer.authorize_click("c2")
+
+
+def test_agent_and_clicks_reach_the_page_state(viewer):
+    viewer.set_agent(True)
+    viewer.record_click("研究卓を選ぶ")
+    _, state = viewer.next_update(0, 0, 0)
+    assert state["agent"]["enabled"] is True
+    [record] = state["agent"]["clicks"]
+    assert record["what"] == "研究卓を選ぶ"
+    assert re.fullmatch(r"\d\d:\d\d:\d\d", record["time"])
+
+
+def test_each_change_moves_the_state_version(viewer):
+    _, first = viewer.next_update(0, 0, 0)
+    viewer.set_agent(True)
+    _, second = viewer.next_update(0, first["version"], 0)
+    viewer.record_click("タブを開く")
+    _, third = viewer.next_update(0, second["version"], 0)
+    assert first["version"] < second["version"] < third["version"]
+
+
+def test_click_records_keep_the_newest_five(viewer):
+    for number in range(1, 8):
+        viewer.record_click(str(number))
+    _, state = viewer.next_update(0, 0, 0)
+    assert [record["what"] for record in state["agent"]["clicks"]] == ["7", "6", "5", "4", "3"]
+
+
+def test_closing_the_last_tab_turns_the_agent_off(viewer):
+    viewer.register_client()
+    viewer.register_client()
+    viewer.set_agent(True)
+    viewer.unregister_client()
+    _, state = viewer.next_update(0, 0, 0)
+    assert state["agent"]["enabled"] is True
+    viewer.unregister_client()
+    _, state = viewer.next_update(0, 0, 0)
+    assert state["agent"]["enabled"] is False
+
+
+def test_publish_carries_the_target_kind(viewer):
+    viewer.publish("c1", "", "Display")
+    assert viewer.next_view(0, 0)["target"] == "monitor"
+    viewer.publish("c2", "", "Excel")
+    assert viewer.next_view(1, 0)["target"] == "window"
+
+
+def test_agent_endpoint_checks_auth_and_body(viewer):
+    viewer.ensure_started()
+    assert post(viewer, "/agent", {"enabled": True}, token="wrong")[0] == 403
+    assert post(viewer, "/agent", {"enabled": True}, origin="http://evil.example")[0] == 403
+    assert post(viewer, "/agent", {"enabled": "yes"})[0] == 400
+    assert post(viewer, "/agent", {})[0] == 400
+    assert post(viewer, "/agent", {"enabled": True}) == (200, {"ok": True})
+    _, state = viewer.next_update(0, 0, 0)
+    assert state["agent"]["enabled"] is True
+    assert post(viewer, "/agent", {"enabled": False}) == (200, {"ok": True})
+    _, state = viewer.next_update(0, 0, 0)
+    assert state["agent"]["enabled"] is False
+
+
+def test_authorize_still_knows_the_shown_window_after_its_capture_left_the_store(control):
+    store = CaptureStore(limit=2)
+    shown = store.add(b"window-jpeg", WINDOW_META, Target("window", 42))
+    viewer = Viewer(store, control, settle_seconds=0, after_click_seconds=0, ack_timeout=1.0, heartbeat_seconds=0.2)
+    try:
+        viewer.publish(shown, "", "Excel")
+        viewer.set_agent(True)
+        store.add(b"window-jpeg", WINDOW_META, Target("window", 42))
+        newest = store.add(b"window-jpeg", WINDOW_META, Target("window", 42))  # `shown` is gone now
+        viewer.authorize_click(newest)  # no error
+    finally:
+        viewer.close()
