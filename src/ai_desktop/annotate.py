@@ -86,7 +86,7 @@ let agentPanel = null;
 let agentOn = null;
 let agentNote = null;
 let agentLog = null;
-const AGENT_CONFIRM_TEXT = "このページに表示中のウィンドウを、Claude が左クリックしてよいですか？\nほかのウィンドウを表示すると、許可はオフに戻ります。いつでもオフにできます。";
+const AGENT_CONFIRM_TEXT = "このページに表示中のウィンドウを、Claude が左クリックしてよいですか？\\nほかのウィンドウを表示すると、許可はオフに戻ります。いつでもオフにできます。";
 const STATE_TEXT = {
   waiting: "",
   thinking: "考え中…",

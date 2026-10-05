@@ -1,4 +1,21 @@
+import shutil
+import subprocess
+
+import pytest
+
 from ai_desktop.annotate import VIEWER_TITLE_PREFIX, content_security_policy, render_shell
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs Node.js to parse the page script")
+def test_page_script_is_valid_javascript(tmp_path):
+    # The script is a Python string, so an escape like "\n" turns into a real line break inside a
+    # JavaScript string and the whole page stops working; the substring checks below cannot see that.
+    page = render_shell("n0nce")
+    script = page.split('<script nonce="n0nce">')[1].split("</script>")[0]
+    path = tmp_path / "viewer.js"
+    path.write_text(script, encoding="utf-8")
+    checked = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert checked.returncode == 0, checked.stderr
 
 
 def test_viewer_csp_allows_only_own_script_and_same_origin():
