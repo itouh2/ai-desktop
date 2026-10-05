@@ -46,19 +46,30 @@ def test_move_normalizes_across_the_virtual_desktop(user32):
     assert (last.dx, last.dy) == (65535, 65535)
 
 
-def test_click_moves_then_presses_and_releases(user32):
+@pytest.fixture
+def sleeps(monkeypatch):
+    slept = []
+    monkeypatch.setattr(inputs, "_sleep", slept.append)
+    return slept
+
+
+def test_click_rests_on_the_point_before_pressing(user32, sleeps):
+    # Games pick what is under the cursor once a frame; a press in the same frame as the move
+    # lands on whatever the cursor was over before (seen in Balatro, 2026-10-05).
     inputs.click(100, 200)
-    flags = [event.u.mi.dwFlags for event in user32.batches[0]]
+    flags = [[event.u.mi.dwFlags for event in batch] for batch in user32.batches]
     assert flags == [
-        MOVE_FLAGS,
-        MOVE_FLAGS | inputs.MOUSEEVENTF_LEFTDOWN,
-        MOVE_FLAGS | inputs.MOUSEEVENTF_LEFTUP,
+        [MOVE_FLAGS],
+        [MOVE_FLAGS | inputs.MOUSEEVENTF_LEFTDOWN],
+        [MOVE_FLAGS | inputs.MOUSEEVENTF_LEFTUP],
     ]
+    assert sleeps == [inputs.HOVER_SECONDS, inputs.PRESS_SECONDS]
 
 
-def test_double_click_presses_twice(user32):
+def test_double_click_presses_twice(user32, sleeps):
     inputs.click(100, 200, double=True)
-    assert [len(batch) for batch in user32.batches] == [3, 2]
+    assert [len(batch) for batch in user32.batches] == [1, 1, 1, 1, 1]
+    assert sleeps == [inputs.HOVER_SECONDS, inputs.PRESS_SECONDS, inputs.DOUBLE_CLICK_GAP_SECONDS, inputs.PRESS_SECONDS]
 
 
 def test_tap_alt_presses_and_releases_alt(user32):

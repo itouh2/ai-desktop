@@ -22,6 +22,9 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 VK_MENU = 0x12
 DOUBLE_CLICK_GAP_SECONDS = 0.05
+HOVER_SECONDS = 0.1  # the cursor rests on the point this long before the press
+PRESS_SECONDS = 0.05  # the button stays down this long
+_sleep = time.sleep  # replaced in tests
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -70,15 +73,25 @@ def move(x: int, y: int) -> None:
 
 
 def click(x: int, y: int, double: bool = False) -> None:
-    """Left-click (or double-click) at physical screen coordinates.
+    """Left-click (or double-click) at physical screen coordinates, the way a hand does it.
 
-    Every event carries the absolute position, so a mouse the user is still moving
+    The cursor rests on the point before the press, because games pick what is under the
+    cursor once a frame and a press arriving with the move lands on what the cursor was over
+    before (seen in Balatro, 2026-10-05); the button stays down across a frame for apps that
+    poll it. Every event carries the absolute position, so a mouse the user is still moving
     cannot drag the click somewhere else (seen in the smoke test, 2026-10-03)."""
-    press = (_mouse_at(x, y, MOUSEEVENTF_LEFTDOWN), _mouse_at(x, y, MOUSEEVENTF_LEFTUP))
-    _send(_mouse_at(x, y, 0), *press)
+    _send(_mouse_at(x, y, 0))
+    _sleep(HOVER_SECONDS)
+    _press(x, y)
     if double:
-        time.sleep(DOUBLE_CLICK_GAP_SECONDS)
-        _send(*press)
+        _sleep(DOUBLE_CLICK_GAP_SECONDS)
+        _press(x, y)
+
+
+def _press(x: int, y: int) -> None:
+    _send(_mouse_at(x, y, MOUSEEVENTF_LEFTDOWN))
+    _sleep(PRESS_SECONDS)
+    _send(_mouse_at(x, y, MOUSEEVENTF_LEFTUP))
 
 
 def tap_alt() -> None:
