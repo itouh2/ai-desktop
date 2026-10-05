@@ -22,7 +22,7 @@ uv run pytest
 このフォルダの `.mcp.json` に登録してあります。Claude Code をこのフォルダで開くと、初回だけ使ってよいかの確認が出るので許可してください。
 
 ```powershell
-claude mcp get ai-desktop   # Scope: Project config と出れば OK
+claude mcp get ai-desktop   # このフォルダで実行。Scope: Project config と出れば OK
 ```
 
 以前ユーザー全体に登録していたら、次のコマンドで消してください（残っていると別のフォルダでも動いてしまいます）：
@@ -31,9 +31,9 @@ claude mcp get ai-desktop   # Scope: Project config と出れば OK
 claude mcp remove ai-desktop -s user
 ```
 
-`--no-sync` を付けるのは、別の Claude Code セッションの MCP サーバーが動いていても起動できるようにするためです（付けないと、起動時の同期が使用中の `ai-desktop.exe` を書き換えられずに失敗します）。依存関係を変えたときは、すべてのセッションを閉じてから `uv sync` を実行してください。
+`.mcp.json` の args で `--no-sync` を付けているのは、別の Claude Code セッションの MCP サーバーが動いていても起動できるようにするためです（付けないと、起動時の同期が使用中の `ai-desktop.exe` を書き換えられずに失敗します）。依存関係を変えたときは、すべてのセッションを閉じてから `uv sync` を実行してください。
 
-登録後、Claude Code のセッションを開き直すとツールが使えるようになります。初回は Claude Code の許可確認が出ます（「常に許可」を選ぶと、以降は確認なしで撮影されます）。
+登録後、Claude Code のセッションを開き直すとツールが使えるようになります。ツールを初めて使うときは、Claude Code の許可確認が出ます（「常に許可」を選ぶと、以降は確認なしで撮影されます）。
 ツールを追加・更新したあとは、Claude Code のセッションを開き直すと反映されます。
 
 ## 使い方の例

@@ -61,6 +61,7 @@ def test_viewer_shell_has_a_builtin_refresh_button():
         '<span id="buttons"></span><span id="bar-state"></span>'
     ) in page
     assert 'post("/refresh", {})' in page
+    assert 'document.getElementById("refresh").addEventListener("click", refresh);' in page
     assert 'document.getElementById("refresh").disabled = !enabled;' in page
     assert "#bar #refresh {" in page
 

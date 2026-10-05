@@ -41,7 +41,7 @@ user to send you messages without leaving it: pass buttons (fixed replies such a
 tell you something the buttons cannot, like what they see or a question), plus an \
 explanation, then call wait_for_message; you get the message (and whether it came from \
 a button or the text box) plus a fresh capture of the same target, so react to it and, \
-to keep going, show the page again and wait again. Such a page always has a built-in 更新 (refresh) button too, so never put 更新 in buttons; a message with via "refresh" means the user wants you to look again, so read the fresh capture and show the current step again. If it returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box (html may be omitted) so the page leaves its thinking state."""
+to keep going, show the page again and wait again. Such a page always has a built-in 更新 (refresh) button too, so never put 更新 in buttons; a message with via "refresh" means the user wants you to look again, so read the fresh capture and show the current step again. If wait_for_message returns {"message": null}, call it again, but after five nulls in a row stop waiting and tell the user in the chat how to resume. When you stop taking messages on the page (the user is done, chose to stop, or talks about something else), call show_annotated once without buttons or message_box (html may be omitted) so the page leaves its thinking state."""
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
@@ -182,9 +182,9 @@ def show_annotated(
     <svg class="layer"><line class="arrow" x1=".." y1=".." x2=".." y2=".."/></svg>
     (svg.layer covers the image, in image pixels). Scripts and external resources are
     blocked. Omit it (or pass "") for a page with no annotations, e.g. to end a conversation on the page.
-    title: optional page title. explanation: optional plain text shown beside the
+    title: optional page title. explanation: optional plain text shown below the
     image. buttons and message_box are the page's ways for the user to send you a message:
-    buttons are labels (up to 6, 30 chars each) shown above the image, each sending its own
+    buttons are labels (up to 6, 30 chars each) shown in the reply bar at the bottom of the page, each sending its own
     label; message_box=true adds a text box (Enter sends, Shift+Enter breaks the line) for
     free text. With either, call wait_for_message next to receive what the user sends.
     A page with buttons or message_box also gets a built-in 更新 (refresh) button; never put 更新 in buttons."""
