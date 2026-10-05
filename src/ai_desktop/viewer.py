@@ -31,11 +31,22 @@ UNKNOWN_BUTTON_MESSAGE = "そのボタンは今は使えません。"
 NO_MESSAGE_BOX_MESSAGE = "このページでは入力欄を使えません。"
 EMPTY_MESSAGE = "メッセージが空です。"
 LONG_MESSAGE = f"メッセージは {MAX_MESSAGE_CHARS} 文字までです。"
+MAX_CLICK_RECORDS = 5
+AGENT_OFF_MESSAGE = "ページで『Claude に操作を任せる』がオフです。押してほしいことをユーザーに伝えるか、オンにしてもらってください。"
+NO_PAGE_FOR_CLICK_MESSAGE = "表示中のページがありません。先に show_annotated で対象のウィンドウを表示してください。"
+MONITOR_CLICK_MESSAGE = "画面全体の撮影ではクリックできません。対象のウィンドウを capture_window で撮り、ページに表示してください。"
+OTHER_WINDOW_MESSAGE = "クリックできるのは、ページに表示中のウィンドウだけです。"
+AGENT_STALE_MESSAGE = "ページの表示が別のウィンドウに変わりました。表示を確かめてから、もう一度オンにしてください。"
 
 
 def _accepts_messages(view: dict) -> bool:
     """Whether the page offers a way to send Claude a message (buttons or the message box)."""
     return bool(view["buttons"]) or view["messageBox"]
+
+
+def _target_key(target: Target) -> str:
+    """How the page names a capture target ("window:<hwnd>" or "monitor:<id>")."""
+    return f"{target.kind}:{target.id}"
 
 
 def _token_matches(candidate: str, token: str) -> bool:
@@ -76,14 +87,17 @@ class Viewer:
         self._server: ThreadingHTTPServer | None = None
         self._changed = threading.Condition()
         self._view: dict | None = None
+        self._shown_target: Target | None = None
         self._version = 0
         self._acked = 0
         self._clients = 0
-        self._pointer = pointer if pointer is not None else Pointer(store, control, settle_seconds)
+        self._pointer = pointer if pointer is not None else Pointer(store, control, settle_seconds, settle_seconds)
         self._state = "idle"
         self._state_version = 1  # new tabs receive the current state right away
         self._wait_generation = 0
         self._reply: dict | None = None
+        self._agent = False  # the user's permission for Claude's click tool; off until the page turns it on
+        self._clicks: list[dict] = []  # Claude's latest clicks, newest first
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -127,8 +141,11 @@ class Viewer:
         """Make this the current view; True when an open tab confirmed it within the timeout.
 
         buttons and message_box are the page's ways of sending Claude a message: a button
-        sends its label, the message box sends what the user typed."""
+        sends its label, the message box sends what the user typed. The permission for Claude's
+        clicks belongs to the window the page showed when the user gave it, so showing another
+        window or a monitor turns it off; a newer capture of the same window keeps it."""
         _, meta = self._store.get(capture_id)
+        target = self._store.target(capture_id)
         self.ensure_started()
         with self._changed:
             self._version += 1
@@ -143,7 +160,13 @@ class Viewer:
                 "explanation": explanation[:MAX_EXPLANATION_CHARS],
                 "buttons": list(buttons or []),
                 "messageBox": bool(message_box),
+                "target": target.kind,
+                "targetKey": _target_key(target),
             }
+            if self._agent and target != self._shown_target:
+                self._agent = False
+                self._bump_state()
+            self._shown_target = target  # kept here: the shown capture may leave the store before a click
             if self._state == "waiting" and not _accepts_messages(self._view):
                 self._wait_generation += 1  # the waiter returns None
                 self._set_state("idle")
@@ -277,8 +300,48 @@ class Viewer:
     def _set_state(self, state: str) -> None:
         """Caller holds self._changed."""
         self._state = state
+        self._bump_state()
+
+    def _bump_state(self) -> None:
+        """Send the page a new state entry. Caller holds self._changed."""
         self._state_version += 1
         self._changed.notify_all()
+
+    # --- Claude's clicks: permission and records -------------------------------------------
+
+    def set_agent(self, enabled: bool, target_key: str | None = None) -> None:
+        """The page's switch for letting Claude click: the only way the permission is given.
+
+        Turning it on names the target the page showed (its targetKey); unless that is still the
+        shown target, it raises CaptureError(AGENT_STALE_MESSAGE) and stays off, so a page that
+        changed under the user's click cannot hand over a window they did not see. Turning it off
+        always works."""
+        with self._changed:
+            if enabled and (self._shown_target is None or target_key != _target_key(self._shown_target)):
+                raise CaptureError(AGENT_STALE_MESSAGE)
+            self._agent = enabled
+            self._bump_state()
+
+    def authorize_click(self, capture_id: str) -> None:
+        """Raise CaptureError unless Claude may click on this capture now: the user allowed it
+        and the capture is of the window the page shows."""
+        with self._changed:
+            if not self._agent:
+                raise CaptureError(AGENT_OFF_MESSAGE)
+            if self._view is None:
+                raise CaptureError(NO_PAGE_FOR_CLICK_MESSAGE)
+            target = self._store.target(capture_id)
+            if target.kind == "monitor":
+                raise CaptureError(MONITOR_CLICK_MESSAGE)
+            if target != self._shown_target:
+                raise CaptureError(OTHER_WINDOW_MESSAGE)
+
+    def record_click(self, what: str) -> None:
+        """Log a click Claude made, newest first, for the page to show."""
+        with self._changed:
+            self._clicks.insert(0, {"time": time.strftime("%H:%M:%S"), "what": what})
+            del self._clicks[MAX_CLICK_RECORDS:]
+            self._bump_state()
 
     # --- clicking --------------------------------------------------------------------------
 
@@ -303,6 +366,9 @@ class Viewer:
     def unregister_client(self) -> None:
         with self._changed:
             self._clients -= 1
+            if self._clients <= 0 and self._agent:
+                self._agent = False  # nobody is watching the page any more
+                self._bump_state()
 
     def acknowledge(self, version: int) -> None:
         with self._changed:
@@ -322,7 +388,13 @@ class Viewer:
                 return None, None
             view = dict(self._view) if self._view is not None and self._view["version"] > seen_view else None
             state = (
-                {"version": self._state_version, "state": self._state} if self._state_version > seen_state else None
+                {
+                    "version": self._state_version,
+                    "state": self._state,
+                    "agent": {"enabled": self._agent, "clicks": [dict(click) for click in self._clicks]},
+                }
+                if self._state_version > seen_state
+                else None
             )
             return view, state
 
@@ -409,6 +481,18 @@ def _handler_for(viewer: Viewer) -> type[BaseHTTPRequestHandler]:
             elif path == "/refresh":
                 try:
                     viewer.refresh()
+                except CaptureError as error:
+                    self._send_json(200, {"error": str(error)})
+                else:
+                    self._send_json(200, {"ok": True})
+            elif path == "/agent":
+                enabled = body.get("enabled")
+                target_key = body.get("target")
+                if not isinstance(enabled, bool) or (enabled and not isinstance(target_key, str)):
+                    self._send_json(400, {"error": "要求の形式が正しくありません。"})
+                    return
+                try:
+                    viewer.set_agent(enabled, target_key if enabled else None)
                 except CaptureError as error:
                     self._send_json(200, {"error": str(error)})
                 else:

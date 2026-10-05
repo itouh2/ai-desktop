@@ -22,6 +22,11 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 VK_MENU = 0x12
 DOUBLE_CLICK_GAP_SECONDS = 0.05
+HOVER_SECONDS = 0.1  # the cursor rests on the point this long before the press
+PRESS_SECONDS = 0.05  # the button stays down this long
+DRAG_STEPS = 20  # a drag travels in this many moves
+DRAG_STEP_SECONDS = 0.025  # between the moves of a drag (a 60 fps frame is about 0.017 s)
+_sleep = time.sleep  # replaced in tests
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -70,15 +75,47 @@ def move(x: int, y: int) -> None:
 
 
 def click(x: int, y: int, double: bool = False) -> None:
-    """Left-click (or double-click) at physical screen coordinates.
+    """Left-click (or double-click) at physical screen coordinates, the way a hand does it.
 
-    Every event carries the absolute position, so a mouse the user is still moving
+    The cursor rests on the point before the press, because games pick what is under the
+    cursor once a frame and a press arriving with the move lands on what the cursor was over
+    before (seen in Balatro, 2026-10-05); the button stays down across a frame for apps that
+    poll it. Every event carries the absolute position, so a mouse the user is still moving
     cannot drag the click somewhere else (seen in the smoke test, 2026-10-03)."""
-    press = (_mouse_at(x, y, MOUSEEVENTF_LEFTDOWN), _mouse_at(x, y, MOUSEEVENTF_LEFTUP))
-    _send(_mouse_at(x, y, 0), *press)
+    _send(_mouse_at(x, y, 0))
+    _sleep(HOVER_SECONDS)
+    _press(x, y)
     if double:
-        time.sleep(DOUBLE_CLICK_GAP_SECONDS)
-        _send(*press)
+        _sleep(DOUBLE_CLICK_GAP_SECONDS)
+        _press(x, y)
+
+
+def drag(start: tuple[int, int], end: tuple[int, int]) -> None:
+    """Left-drag from start to end (physical screen coordinates), the way a hand does it.
+
+    The press comes after a rest on the start, as in click; the cursor then travels to the end in
+    DRAG_STEPS moves a little over a frame apart, so a game that follows the cursor once a frame
+    sees it move, and rests on the end before the release. The release is sent even when a move
+    fails, so the button is never left down."""
+    _send(_mouse_at(*start, 0))
+    _sleep(HOVER_SECONDS)
+    _send(_mouse_at(*start, MOUSEEVENTF_LEFTDOWN))
+    _sleep(PRESS_SECONDS)
+    try:
+        for step in range(1, DRAG_STEPS + 1):
+            x = round(start[0] + (end[0] - start[0]) * step / DRAG_STEPS)
+            y = round(start[1] + (end[1] - start[1]) * step / DRAG_STEPS)
+            _send(_mouse_at(x, y, 0))
+            _sleep(DRAG_STEP_SECONDS)
+        _sleep(HOVER_SECONDS)
+    finally:
+        _send(_mouse_at(*end, MOUSEEVENTF_LEFTUP))
+
+
+def _press(x: int, y: int) -> None:
+    _send(_mouse_at(x, y, MOUSEEVENTF_LEFTDOWN))
+    _sleep(PRESS_SECONDS)
+    _send(_mouse_at(x, y, MOUSEEVENTF_LEFTUP))
 
 
 def tap_alt() -> None:
