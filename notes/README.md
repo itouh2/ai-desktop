@@ -6,5 +6,7 @@
 | アプリ | フォルダ | 見分け方 |
 |---|---|---|
 | Slay the Spire 2 | [`slay-the-spire-2/`](slay-the-spire-2/README.md) | ウィンドウタイトル「Slay the Spire 2」 |
+| RimWorld | [`rimworld/`](rimworld/README.md) | ウィンドウタイトル「RimWorld by Ludeon Studios」（exe は RimWorldWin64.exe） |
+| Balatro | [`balatro/`](balatro/README.md) | ウィンドウタイトル「Balatro」 |
 
 新しいアプリを扱ったら、ここに 1 行足す。

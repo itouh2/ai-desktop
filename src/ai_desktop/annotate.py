@@ -8,7 +8,8 @@ html { overflow-y: scroll; }
 #viewport { position: relative; width: 100%; overflow: hidden; }
 #stage { position: relative; transform-origin: 0 0; }
 #shot { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-#annotations { position: absolute; inset: 0; font-family: system-ui, "Yu Gothic UI", sans-serif; }
+#annotations { position: absolute; inset: 0; isolation: isolate;
+  font-family: system-ui, "Yu Gothic UI", sans-serif; }
 #annotations .box { position: absolute; box-sizing: border-box; border: 3px solid #e5484d;
   border-radius: 6px; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7); }
 #annotations .badge { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px;
@@ -41,6 +42,14 @@ _VIEWER_CSS = """
   font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
 #status.show { display: block; }
 #status.error { background: #e5484d; }
+#agent { position: fixed; top: 12px; left: 12px; z-index: 10; box-sizing: border-box; max-width: 320px;
+  padding: 8px 12px; border: 2px solid transparent; border-radius: 6px; background: rgba(0, 0, 0, 0.78);
+  color: #fff; font: 14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
+#agent.on { border-color: #f5a524; background: rgba(245, 165, 36, 0.92); color: #1a1a1a; }
+#agent label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#agent input:disabled { cursor: default; }
+#agent-note:empty, #agent-log:empty { display: none; }
+#agent-log { margin: 6px 0 0; padding-left: 22px; font-size: 13px; }
 #layout { display: flex; flex-direction: column; }
 #viewport { margin: 0 auto; }
 #side { box-sizing: border-box; max-height: 30vh; overflow-y: auto; padding: 12px 16px; color: #eee;
@@ -70,6 +79,14 @@ let pending = null;
 let statusTimer = null;
 let buttonState = "idle";
 let sending = false;
+let agent = {enabled: false, clicks: []};
+// The permission panel's elements, taken once at startup before any annotation HTML is on the page,
+// so nothing drawn later can stand in for them.
+let agentPanel = null;
+let agentOn = null;
+let agentNote = null;
+let agentLog = null;
+const AGENT_CONFIRM_TEXT = "このページに表示中のウィンドウを、Claude が左クリックしてよいですか？\\nほかのウィンドウを表示すると、許可はオフに戻ります。いつでもオフにできます。";
 const STATE_TEXT = {
   waiting: "",
   thinking: "考え中…",
@@ -104,6 +121,49 @@ function renderButtons() {
   syncControls();
   document.getElementById("bar-state").textContent = STATE_TEXT[buttonState] || "";
   fit();
+}
+
+// Draws the "let Claude operate" panel from the last agent state the server sent and the shown view.
+// The checkbox always follows the server's state; Claude's click records go in as text, never HTML.
+// A monitor capture cannot be handed over, but the switch only locks while the permission is off, so
+// the user can always take it back.
+function renderAgent() {
+  const monitor = Boolean(view && view.target === "monitor");
+  agentOn.checked = agent.enabled;
+  agentOn.disabled = monitor && !agent.enabled;
+  agentPanel.classList.toggle("on", agent.enabled);
+  agentNote.textContent = monitor
+    ? "画面全体の撮影ではクリックを任せられません"
+    : (agent.enabled ? "操作を任せています" : "");
+  agentLog.replaceChildren(...agent.clicks.map((record) => {
+    const item = document.createElement("li");
+    item.textContent = record.time + " " + record.what;
+    return item;
+  }));
+}
+
+// Asks the server to switch the permission. The page is not changed here: it follows the next state
+// event. If the request fails, the checkbox goes back to what the server last said and the reason shows.
+// Turning it on names the target this page shows, so the server refuses it if the page has just changed.
+// It also asks in the browser's own dialog, which annotation HTML cannot cover or imitate (a popover in
+// the top layer can sit over the checkbox and turn an ordinary click into a click on it).
+async function setAgent(enabled) {
+  if (enabled && !confirm(AGENT_CONFIRM_TEXT)) {
+    renderAgent();
+    return;
+  }
+  try {
+    const body = enabled ? {enabled: true, target: view ? view.targetKey : ""} : {enabled: false};
+    const response = await post("/agent", body);
+    const result = await response.json();
+    if (result.error) {
+      renderAgent();
+      status(result.error, true);
+    }
+  } catch (error) {
+    renderAgent();
+    status("切り替えられませんでした: " + error, true);
+  }
 }
 
 function syncControls() {
@@ -190,10 +250,15 @@ function render(next) {
   document.getElementById("shot").src =
     "/image/" + encodeURIComponent(next.captureId) + "?t=" + encodeURIComponent(token);
   document.getElementById("annotations").innerHTML = next.html;
+  // Annotation HTML must not reach the page's own controls: a label could point at one and a style
+  // sheet could move one under the user's next click, so neither is kept.
+  for (const label of document.querySelectorAll("#annotations label[for]")) label.removeAttribute("for");
+  for (const sheet of document.querySelectorAll("#annotations style")) sheet.remove();
   const side = document.getElementById("side");
   side.textContent = next.explanation || "";
   side.hidden = !next.explanation;
   renderButtons();
+  renderAgent();
   status("", false);
   fit();
 }
@@ -231,6 +296,10 @@ async function operate(event, double) {
 }
 
 addEventListener("DOMContentLoaded", () => {
+  agentPanel = document.getElementById("agent");
+  agentOn = document.querySelector("#agent input");
+  agentNote = document.getElementById("agent-note");
+  agentLog = document.getElementById("agent-log");
   const input = document.getElementById("message");
   input.addEventListener("keydown", (event) => {
     // Enter sends, Shift+Enter breaks the line; Enter that confirms an IME conversion does neither.
@@ -241,6 +310,8 @@ addEventListener("DOMContentLoaded", () => {
   input.addEventListener("input", fitMessage);
   document.getElementById("send").addEventListener("click", sendMessage);
   document.getElementById("refresh").addEventListener("click", refresh);
+  agentOn.addEventListener("change", () => setAgent(agentOn.checked));
+  renderAgent();
   document.getElementById("stage").addEventListener("click", (event) => {
     clearTimeout(pending);
     if (event.target.closest("#annotations .note, #annotations .badge, #annotations a, #annotations button")) {
@@ -261,8 +332,11 @@ addEventListener("DOMContentLoaded", () => {
     post("/ack", {version: next.version});
   });
   events.addEventListener("state", (event) => {
-    buttonState = JSON.parse(event.data).state;
+    const next = JSON.parse(event.data);
+    buttonState = next.state;
+    agent = next.agent;
     renderButtons();
+    renderAgent();
   });
   events.addEventListener("error", () => {
     status("サーバーとの接続が切れました。Claude Code のセッションを確認してください。", true);
@@ -291,6 +365,9 @@ def render_shell(nonce: str) -> str:
         "</head><body>\n"
         f"{_ARROWHEAD}\n"
         '<div id="status"></div>\n'
+        '<div id="agent"><label><input type="checkbox"> '
+        "Claude に操作を任せる（このウィンドウだけ・左クリック）</label>"
+        '<div id="agent-note"></div><ol id="agent-log"></ol></div>\n'
         '<div id="layout">\n'
         '<div id="viewport"><div id="stage">'
         '<img id="shot" alt="">'

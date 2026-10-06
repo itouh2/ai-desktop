@@ -48,7 +48,7 @@ def fake_capture(monkeypatch):
     monkeypatch.setattr(server, "captures", CaptureStore())
 
 
-def test_exposes_seven_tools():
+def test_exposes_ten_tools():
     async def run():
         async with Client(server.mcp) as client:
             return await client.list_tools()
@@ -56,7 +56,7 @@ def test_exposes_seven_tools():
     names = {tool.name for tool in asyncio.run(run()).tools}
     assert names == {
         "list_monitors", "list_windows", "capture_monitor", "capture_window", "show_annotated",
-        "wait_for_message", "move_mouse",
+        "wait_for_message", "move_mouse", "click", "drag", "scroll",
     }
 
 
@@ -161,6 +161,10 @@ class FakeViewer:
         self.reply = None
         self.waited = []
         self.target = Target("window", 42)
+        self.allowed = True
+        self.deny_on_call = None  # deny from this authorize_click call on (1 = the first)
+        self.authorized = []
+        self.recorded = []
 
     def publish(self, capture_id, html, title, explanation="", buttons=None, message_box=False):
         if self.start_error is not None:
@@ -183,6 +187,14 @@ class FakeViewer:
 
     def focus_browser(self):
         self.focused += 1
+
+    def authorize_click(self, capture_id):
+        self.authorized.append(capture_id)
+        if not self.allowed or (self.deny_on_call is not None and len(self.authorized) >= self.deny_on_call):
+            raise CaptureError("ページで『Claude に操作を任せる』がオフです。押してほしいことをユーザーに伝えるか、オンにしてもらってください。")
+
+    def record_click(self, what):
+        self.recorded.append(what)
 
 
 @pytest.fixture
@@ -232,7 +244,7 @@ def test_tool_descriptions_say_20_captures_are_kept():
             return await client.list_tools()
 
     descriptions = {tool.name: tool.description for tool in asyncio.run(run()).tools}
-    for name in ("show_annotated", "move_mouse"):
+    for name in ("show_annotated", "move_mouse", "click", "drag", "scroll"):
         assert "the latest 20 are kept" in descriptions[name]
 
 
@@ -271,11 +283,16 @@ def test_instructions_are_one_paragraph():
     assert "\n" not in server.INSTRUCTIONS
     assert "show_annotated" in server.INSTRUCTIONS
     assert "move_mouse" in server.INSTRUCTIONS
+    assert "click" in server.INSTRUCTIONS and "Claude に操作を任せる" in server.INSTRUCTIONS
     assert "five nulls" in server.INSTRUCTIONS
     assert "without buttons or message_box" in server.INSTRUCTIONS
     assert "html may be omitted" in server.INSTRUCTIONS
     assert "更新" in server.INSTRUCTIONS
     assert 'via "refresh"' in server.INSTRUCTIONS
+    assert "scroll" in server.INSTRUCTIONS
+    # input tools do not capture: the model captures when it wants to see the result
+    assert "captures the same" not in server.INSTRUCTIONS
+    assert "wait_seconds" in server.INSTRUCTIONS
 
 
 def test_show_annotated_passes_explanation_and_buttons(viewer):
@@ -389,7 +406,7 @@ def test_recapture_takes_the_same_target_again():
 
 
 class Mouse:
-    """What move_mouse did: control calls, cursor moves and sleeps."""
+    """What the input tools did: control calls, cursor moves and sleeps."""
 
     def __init__(self, control):
         self.control = control
@@ -400,40 +417,71 @@ class Mouse:
 @pytest.fixture
 def mouse(monkeypatch):
     mouse = Mouse(FakeControl())
-    monkeypatch.setattr(server, "pointer", Pointer(server.captures, mouse.control, settle_seconds=0))
+    monkeypatch.setattr(server, "pointer", Pointer(server.captures, mouse.control, settle_seconds=0, focus_seconds=0))
     monkeypatch.setattr(inputs, "move", lambda x, y: mouse.moves.append((x, y)))
     monkeypatch.setattr(inputs, "click", lambda *args, **kwargs: pytest.fail("move_mouse must not click"))
+    monkeypatch.setattr(inputs, "drag", lambda *args, **kwargs: pytest.fail("only drag may drag"))
+    monkeypatch.setattr(inputs, "scroll", lambda *args, **kwargs: pytest.fail("only scroll may scroll"))
     monkeypatch.setattr(server, "_sleep", mouse.sleeps.append)
     return mouse
 
 
-def test_move_mouse_moves_waits_recaptures_and_puts_the_cursor_back(mouse):
-    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
-    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
+def text_of(result) -> dict:
+    """The JSON an input tool returns: text only, no image (capture the window to see the result)."""
+    assert not result.is_error, result.content[0].text
+    assert [item.type for item in result.content] == ["text"]
+    return json.loads(result.content[0].text)
+
+
+def test_capture_window_can_wait_before_shooting(monkeypatch):
+    slept = []
+    monkeypatch.setattr(server, "_sleep", slept.append)
+    result = call("capture_window", {"title": "excel", "wait_seconds": 1.5})
     assert not result.is_error
-    assert result.content[0].type == "image"
-    meta = json.loads(result.content[1].text)
-    assert meta["captureId"] == "c2"
-    assert meta["hover"] == {"x": 10, "y": 20, "captureId": "c1"}
-    assert meta["cursorRestored"] is True
-    assert mouse.moves == [(110, 220), (5, 6)]
-    assert mouse.sleeps == [0.5]
-    assert ("bring_to_front", 42) in mouse.control.calls
-    assert not any(call[0] == "click" for call in mouse.control.calls)
+    assert slept == [1.5]
 
 
-def test_move_mouse_can_leave_the_cursor_where_it_moved(mouse):
-    call("capture_window", {"title": "excel"})
-    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20, "restore_cursor": False})
-    assert json.loads(result.content[1].text)["cursorRestored"] is False
+def test_capture_monitor_can_wait_before_shooting(monkeypatch):
+    slept = []
+    monkeypatch.setattr(server, "_sleep", slept.append)
+    call("capture_monitor", {"wait_seconds": 0.8})
+    assert slept == [0.8]
+
+
+@pytest.mark.parametrize(("wait", "expected"), [(None, []), (0, []), (-1, []), (9, [5.0])])
+def test_capture_wait_defaults_to_none_and_is_clamped(monkeypatch, wait, expected):
+    slept = []
+    monkeypatch.setattr(server, "_sleep", slept.append)
+    call("capture_window", {"title": "excel"} if wait is None else {"title": "excel", "wait_seconds": wait})
+    assert slept == expected
+
+
+def test_move_mouse_moves_and_leaves_the_cursor_there(mouse):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = text_of(call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20}))
+    assert result == {"moved": {"x": 10, "y": 20, "captureId": "c1"}, "windowId": 42}
     assert mouse.moves == [(110, 220)]
+    assert mouse.sleeps == []
+    assert ("bring_to_front", 42) in mouse.control.calls
+    with pytest.raises(CaptureError):
+        server.captures.get("c2")  # nothing was captured
 
 
-@pytest.mark.parametrize(("wait", "expected"), [(9, 5.0), (-1, 0.0), (1.25, 1.25)])
-def test_move_mouse_clamps_the_wait(mouse, wait, expected):
+def test_move_mouse_leaves_the_window_in_front(mouse):
+    # Giving focus back could put another window over the cursor and hide the hover text.
+    mouse.control.foreground = 999
     call("capture_window", {"title": "excel"})
-    call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20, "wait_seconds": wait})
-    assert mouse.sleeps == [expected]
+    text_of(call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20}))
+    assert ("restore", 999) not in mouse.control.calls
+
+
+def test_move_mouse_on_a_monitor_keeps_a_covering_browser_down(mouse):
+    call("capture_monitor")  # c1: 3200x1600 shown at 0.49; the browser covers (0, 0)-(1000, 1000)
+    result = text_of(call("move_mouse", {"capture_id": "c1", "x": 49, "y": 98}))
+    assert result == {"moved": {"x": 49, "y": 98, "captureId": "c1"}, "monitorId": 1}
+    assert mouse.moves == [(100, 200)]
+    assert ("minimize", BROWSER) in mouse.control.calls
+    assert ("restore", BROWSER) not in mouse.control.calls
 
 
 def test_move_mouse_outside_the_image_does_not_move(mouse):
@@ -444,54 +492,322 @@ def test_move_mouse_outside_the_image_does_not_move(mouse):
     assert mouse.moves == []
 
 
-def test_move_mouse_puts_the_cursor_back_when_the_recapture_fails(mouse, monkeypatch):
-    call("capture_window", {"title": "excel"})
-
-    def gone(hwnd):
-        raise CaptureError("window_id 42 のウィンドウは存在しません。")
-
-    monkeypatch.setattr(capture, "capture_window", gone)
-    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
-    assert result.is_error
-    assert "存在しません" in result.content[0].text
-    assert mouse.moves == [(110, 220), (5, 6)]
-    assert mouse.control.calls[-1] == ("restore", BROWSER)
-
-
-def test_move_mouse_recapture_failure_without_restore_cursor_does_not_move_back(mouse, monkeypatch):
-    call("capture_window", {"title": "excel"})
-
-    def gone(hwnd):
-        raise CaptureError("window_id 42 のウィンドウは存在しません。")
-
-    monkeypatch.setattr(capture, "capture_window", gone)
-    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20, "restore_cursor": False})
-    assert result.is_error
-    assert mouse.moves == [(110, 220)]
-
-
-def test_move_mouse_gives_focus_back_without_touching_the_browser(monkeypatch):
-    control = FakeControl(foreground=999)
-    monkeypatch.setattr(server, "pointer", Pointer(server.captures, control, settle_seconds=0))
-    monkeypatch.setattr(inputs, "move", lambda x, y: None)
-    monkeypatch.setattr(server, "_sleep", lambda seconds: None)
-    call("capture_window", {"title": "excel"})
-    result = call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20})
-    assert not result.is_error
-    assert ("restore", BROWSER) not in control.calls
-    assert ("restore", 999) in control.calls
-
-
-def test_move_mouse_on_a_monitor_clears_the_browser_first(mouse):
-    call("capture_monitor")  # c1: 3200x1600 shown at 0.49
-    result = call("move_mouse", {"capture_id": "c1", "x": 49, "y": 98})
-    assert not result.is_error
-    assert mouse.moves[0] == (100, 200)
-    assert ("minimize", BROWSER) in mouse.control.calls
-    assert mouse.control.calls[-1] == ("restore", BROWSER)
-
-
 def test_move_mouse_unknown_capture_is_reported(mouse):
     result = call("move_mouse", {"capture_id": "c9", "x": 1, "y": 1})
     assert result.is_error
     assert mouse.moves == []
+
+
+def test_move_mouse_does_not_check_what_is_on_top(mouse):
+    mouse.control.covered_by = 555
+    call("capture_window", {"title": "excel"})
+    text_of(call("move_mouse", {"capture_id": "c1", "x": 10, "y": 20}))
+    assert not any(call[0] == "window_at" for call in mouse.control.calls)
+
+
+@pytest.fixture
+def hand(mouse, monkeypatch):
+    """mouse, but clicks are recorded instead of failing the test."""
+    mouse.clicks = []
+    monkeypatch.setattr(inputs, "click", lambda x, y, double=False: mouse.clicks.append((x, y, double)))
+    return mouse
+
+
+def test_click_is_refused_without_permission(hand, viewer):
+    viewer.allowed = False
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "オフです" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_left_clicks_once_rests_and_puts_the_cursor_back(hand, viewer):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = text_of(call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "研究卓を選ぶ"}))
+    assert result == {"clicked": {"x": 10, "y": 20, "captureId": "c1", "what": "研究卓を選ぶ"}, "windowId": 42}
+    assert hand.clicks == [(110, 220, False)]
+    # the cursor stays on the point a moment, for apps that read where it is once a frame
+    assert hand.sleeps == [server.AFTER_INPUT_SECONDS] and server.AFTER_INPUT_SECONDS == 0.3
+    assert hand.moves == [(5, 6)]
+    assert viewer.authorized == ["c1", "c1"]
+    assert viewer.recorded == ["研究卓を選ぶ"]
+    with pytest.raises(CaptureError):
+        server.captures.get("c2")  # nothing was captured
+
+
+def test_click_is_refused_when_permission_ends_before_the_press(hand, viewer):
+    viewer.deny_on_call = 2
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert hand.clicks == [] and hand.moves == []
+    assert viewer.recorded == []
+
+
+@pytest.mark.parametrize("what", ["", "   ", "あ" * 61])
+def test_click_needs_a_short_what(hand, viewer, what):
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": what})
+    assert result.is_error
+    assert "1〜60 文字" in result.content[0].text
+    assert hand.clicks == []
+
+
+def test_click_puts_the_cursor_back_when_the_press_fails(hand, viewer, monkeypatch):
+    def broken(x, y, double=False):
+        raise CaptureError("入力を送れませんでした（Win32 エラー 5）。")
+
+    monkeypatch.setattr(inputs, "click", broken)
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "入力を送れませんでした" in result.content[0].text
+    assert hand.moves == [(5, 6)]
+    assert viewer.recorded == []
+
+
+def click_window_of(monkeypatch, app, title):
+    """Capture window 42 as c1 with this app and title in the window list, then try to click it."""
+    window = WindowInfo(id=42, title=title, app=app, x=0, y=0, width=800, height=600, minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [window])
+    call("capture_window", {"window_id": 42})
+    return call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "許可を押す"})
+
+
+@pytest.mark.parametrize("app", sorted(server.PROTECTED_APPS))
+def test_click_refuses_protected_apps(hand, viewer, monkeypatch, app):
+    result = click_window_of(monkeypatch, app.upper(), "Claude Code")  # exe names match in any case
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_protected_apps_cover_other_terminals_and_editors():
+    for app in ("mintty.exe", "wezterm-gui.exe", "alacritty.exe", "tabby.exe", "hyper.exe", "warp.exe",
+                "zed.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "rider64.exe", "goland64.exe",
+                "clion64.exe", "phpstorm64.exe", "rustrover64.exe"):
+        assert app in server.PROTECTED_APPS
+
+
+def test_click_refuses_the_viewer_browser(hand, viewer, monkeypatch):
+    result = click_window_of(monkeypatch, "chrome.exe", "ai-desktop | e2e")
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_refuses_a_window_whose_app_is_unknown(hand, viewer, monkeypatch):
+    result = click_window_of(monkeypatch, "", "管理者: 何かのアプリ")  # the exe lookup failed
+    assert result.is_error
+    assert result.content[0].text.removeprefix("Error executing tool click: ") == (
+        "このウィンドウのアプリを確かめられないため、Claude には押させません。ユーザーが押してください。"
+    )
+    assert hand.clicks == [] and hand.moves == []
+    assert ("bring_to_front", 42) not in hand.control.calls
+
+
+def test_click_refuses_a_window_that_is_gone(hand, viewer, monkeypatch):
+    call("capture_window", {"title": "excel"})
+    monkeypatch.setattr(capture, "list_windows", lambda: [])
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "見つかりません" in result.content[0].text
+    assert hand.clicks == []
+
+
+def test_click_refuses_when_another_window_covers_the_point(hand, viewer):
+    hand.control.covered_by = 555
+    call("capture_window", {"title": "excel"})
+    result = call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"})
+    assert result.is_error
+    assert "別のウィンドウの下" in result.content[0].text
+    assert ("window_at", 110, 220) in hand.control.calls
+    assert hand.clicks == [] and hand.moves == []
+    assert viewer.recorded == []
+
+
+def test_click_leaves_the_clicked_window_in_front(hand, viewer):
+    hand.control.foreground = 999
+    call("capture_window", {"title": "excel"})
+    text_of(call("click", {"capture_id": "c1", "x": 10, "y": 20, "what": "セルを選ぶ"}))
+    assert ("restore", 999) not in hand.control.calls
+
+
+@pytest.fixture
+def grip(hand, monkeypatch):
+    """hand, but drags are recorded too."""
+    hand.drags = []
+    monkeypatch.setattr(inputs, "drag", lambda start, end: hand.drags.append((start, end)))
+    return hand
+
+
+DRAG = {"capture_id": "c1", "from_x": 10, "from_y": 20, "to_x": 30, "to_y": 40, "what": "ジョーカーを右へ"}
+
+
+def test_drag_is_refused_without_permission(grip, viewer):
+    viewer.allowed = False
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert "オフです" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+    assert ("bring_to_front", 42) not in grip.control.calls
+
+
+def test_drag_drags_rests_and_puts_the_cursor_back(grip, viewer):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = text_of(call("drag", DRAG))
+    assert result == {
+        "dragged": {"fromX": 10, "fromY": 20, "toX": 30, "toY": 40, "captureId": "c1", "what": "ジョーカーを右へ"},
+        "windowId": 42,
+    }
+    assert grip.drags == [((110, 220), (130, 240))]
+    assert grip.clicks == []
+    assert grip.sleeps == [server.AFTER_INPUT_SECONDS]
+    assert grip.moves == [(5, 6)]
+    assert viewer.authorized == ["c1", "c1"]
+    assert viewer.recorded == ["ジョーカーを右へ（ドラッグ）"]
+    assert ("window_at", 110, 220) in grip.control.calls
+    assert ("window_at", 130, 240) in grip.control.calls
+
+
+def test_drag_is_refused_when_permission_ends_before_the_press(grip, viewer):
+    viewer.deny_on_call = 2
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert grip.drags == [] and grip.moves == []
+    assert viewer.recorded == []
+
+
+@pytest.mark.parametrize("what", ["", "   ", "あ" * 61])
+def test_drag_needs_a_short_what(grip, viewer, what):
+    call("capture_window", {"title": "excel"})
+    result = call("drag", {**DRAG, "what": what})
+    assert result.is_error
+    assert "1〜60 文字" in result.content[0].text
+    assert grip.drags == []
+
+
+def test_drag_refuses_an_end_point_outside_the_image(grip, viewer):
+    call("capture_window", {"title": "excel"})
+    result = call("drag", {**DRAG, "to_x": 800})
+    assert result.is_error
+    assert "画像の外" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+
+
+def test_drag_refuses_when_another_window_covers_the_end_point(grip, viewer):
+    grip.control.covered_at = {(130, 240): 555}
+    call("capture_window", {"title": "excel"})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert "別のウィンドウの下" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+    assert viewer.recorded == []
+
+
+def test_drag_refuses_protected_apps(grip, viewer, monkeypatch):
+    window = WindowInfo(id=42, title="Claude Code", app="Code.exe", x=0, y=0, width=800, height=600,
+                        minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [window])
+    call("capture_window", {"window_id": 42})
+    result = call("drag", DRAG)
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert grip.drags == [] and grip.moves == []
+    assert ("bring_to_front", 42) not in grip.control.calls
+
+
+def test_drag_leaves_the_window_in_front(grip, viewer):
+    grip.control.foreground = 999
+    call("capture_window", {"title": "excel"})
+    text_of(call("drag", DRAG))
+    assert ("restore", 999) not in grip.control.calls
+
+
+@pytest.fixture
+def wheel(hand, monkeypatch):
+    """hand, but wheel turns are recorded too."""
+    hand.scrolls = []
+    monkeypatch.setattr(inputs, "scroll", lambda x, y, notches: hand.scrolls.append((x, y, notches)))
+    return hand
+
+
+SCROLL = {"capture_id": "c1", "x": 10, "y": 20, "amount": -3, "what": "カードの一覧を下へ"}
+
+
+def test_scroll_is_refused_without_permission(wheel, viewer):
+    # The wheel changes things too (a value under the cursor, the zoom of a map), so it needs the switch.
+    viewer.allowed = False
+    call("capture_window", {"title": "excel"})
+    result = call("scroll", SCROLL)
+    assert result.is_error
+    assert "オフです" in result.content[0].text
+    assert wheel.scrolls == [] and wheel.moves == []
+    assert ("bring_to_front", 42) not in wheel.control.calls
+
+
+def test_scroll_turns_the_wheel_rests_and_puts_the_cursor_back(wheel, viewer):
+    call("capture_window", {"title": "excel"})  # c1; FakeControl puts the window at (100, 200)
+    result = text_of(call("scroll", SCROLL))
+    assert result == {
+        "scrolled": {"x": 10, "y": 20, "amount": -3, "captureId": "c1", "what": "カードの一覧を下へ"},
+        "windowId": 42,
+    }
+    assert wheel.scrolls == [(110, 220, -3)]
+    assert wheel.clicks == []
+    assert wheel.sleeps == [server.AFTER_INPUT_SECONDS]
+    assert wheel.moves == [(5, 6)]
+    assert viewer.authorized == ["c1", "c1"]
+    assert viewer.recorded == ["カードの一覧を下へ（スクロール）"]
+    assert ("window_at", 110, 220) in wheel.control.calls
+
+
+@pytest.mark.parametrize("amount", [0, 21, -21])
+def test_scroll_needs_1_to_20_notches_either_way(wheel, viewer, amount):
+    call("capture_window", {"title": "excel"})
+    result = call("scroll", {**SCROLL, "amount": amount})
+    assert result.is_error
+    assert "-20〜20" in result.content[0].text
+    assert wheel.scrolls == []
+
+
+@pytest.mark.parametrize("what", ["", "あ" * 61])
+def test_scroll_needs_a_short_what(wheel, viewer, what):
+    call("capture_window", {"title": "excel"})
+    result = call("scroll", {**SCROLL, "what": what})
+    assert result.is_error
+    assert "1〜60 文字" in result.content[0].text
+    assert wheel.scrolls == []
+
+
+def test_scroll_refuses_when_another_window_covers_the_point(wheel, viewer):
+    wheel.control.covered_by = 555
+    call("capture_window", {"title": "excel"})
+    result = call("scroll", SCROLL)
+    assert result.is_error
+    assert "別のウィンドウの下" in result.content[0].text
+    assert wheel.scrolls == [] and viewer.recorded == []
+
+
+def test_scroll_refuses_protected_apps(wheel, viewer, monkeypatch):
+    window = WindowInfo(id=42, title="Claude Code", app="Code.exe", x=0, y=0, width=800, height=600,
+                        minimized=False, focused=True)
+    monkeypatch.setattr(capture, "list_windows", lambda: [window])
+    call("capture_window", {"window_id": 42})
+    result = call("scroll", SCROLL)
+    assert result.is_error
+    assert "Claude には押させません" in result.content[0].text
+    assert wheel.scrolls == []
+
+
+def test_scroll_leaves_the_window_in_front(wheel, viewer):
+    wheel.control.foreground = 999
+    call("capture_window", {"title": "excel"})
+    text_of(call("scroll", SCROLL))
+    assert ("restore", 999) not in wheel.control.calls

@@ -7,7 +7,7 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 
@@ -16,10 +16,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from ai_desktop import capture, control, inputs
-from ai_desktop.annotate import REFRESH_LABEL
+from ai_desktop.annotate import REFRESH_LABEL, VIEWER_TITLE_PREFIX
 from ai_desktop.captures import CaptureStore, Target
 from ai_desktop.imaging import CaptureError, build_meta, encode_jpeg, select_window, shrink
-from ai_desktop.pointer import Pointer
+from ai_desktop.pointer import Pointer, Spot
 from ai_desktop.viewer import Viewer
 
 INSTRUCTIONS = """\
@@ -28,10 +28,21 @@ what they are looking at, or a specific app window, capture it instead of asking
 to describe it. For a specific app, call capture_window with part of its title; if \
 several windows match, the error lists candidates, so retry with window_id. Every \
 capture returns a JPEG plus JSON metadata, where screen coordinates = origin + image \
-coordinates / scale (physical pixels). To read something that only appears while the cursor rests on it (a tooltip, hover text, \
-the description of an icon), call move_mouse with a capture's captureId and a point on that \
-image: it moves the user's real cursor there, waits, captures the same target again and puts \
-the cursor back, and it never clicks, so use it when the user is not using the mouse. \
+coordinates / scale (physical pixels); pass wait_seconds to a capture to let an animation or a \
+tooltip settle first. The input tools below only send input and return what they did as text, \
+with no image: capture the window again when you want to see the result (you can call an input \
+tool and then a capture with wait_seconds in one turn). To read something that only appears \
+while the cursor rests on it (a tooltip, hover text, the description of an icon), call move_mouse \
+with a capture's captureId and a point on that image, then capture again: it leaves the user's \
+real cursor there and never clicks, so use it when the user is not using the mouse. \
+When the user has turned on "Claude に操作を任せる" on the viewer page, you may left-click \
+the window shown there with click (capture_id, x, y and a short what describing the target), \
+and after every click you must tell the user in the chat what you clicked. If it is off, ask \
+the user to click or to turn it on. With the same permission, drag (capture_id, from_x, from_y, \
+to_x, to_y and what) presses on one point, moves to the other and releases there, for things a \
+hand would drag (a card, a box selection, a zone), and scroll (capture_id, x, y, amount and what) \
+turns the mouse wheel there, amount notches up when positive and down when negative; tell the \
+user in the chat what you dragged or scrolled as well. \
 To point at things on screen, call \
 show_annotated with the capture's captureId and HTML positioned in that image's pixel \
 coordinates; it shows in the user's browser, reusing the open viewer tab, and the user \
@@ -45,8 +56,21 @@ to keep going, show the page again and wait again. Such a page always has a buil
 
 mcp = MCPServer("ai-desktop", instructions=INSTRUCTIONS)
 BACKGROUND_JPEG_QUALITY = 90
-MOVE_WAIT_DEFAULT_SECONDS = 0.5
-MOVE_WAIT_MAX_SECONDS = 5.0
+CAPTURE_WAIT_MAX_SECONDS = 5.0
+# after a click, drag or scroll the cursor stays on the point this long before it goes back, for
+# apps that read where the cursor is once a frame rather than from the input itself
+AFTER_INPUT_SECONDS = 0.3
+MAX_SCROLL_NOTCHES = 20
+MAX_WHAT_CHARS = 60
+# Apps where Claude Code itself runs (editors, terminals, the Claude app): Claude must not press
+# its own permission dialogs there, so click refuses them (the viewer browser is refused by title).
+PROTECTED_APPS = frozenset({
+    "code.exe", "code - insiders.exe", "cursor.exe", "windsurf.exe", "windowsterminal.exe",
+    "openconsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "claude.exe",
+    "mintty.exe", "wezterm-gui.exe", "alacritty.exe", "tabby.exe", "hyper.exe", "warp.exe",
+    "zed.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "rider64.exe", "goland64.exe",
+    "clion64.exe", "phpstorm64.exe", "rustrover64.exe",
+})
 _sleep = time.sleep  # replaced in tests
 captures = CaptureStore()
 MAX_HTML_CHARS = 100_000
@@ -107,6 +131,17 @@ def _capture_result(
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(meta, ensure_ascii=False)]
 
 
+def _wait_before_capture(wait_seconds: float) -> None:
+    wait = min(CAPTURE_WAIT_MAX_SECONDS, float(wait_seconds))
+    if wait > 0:
+        _sleep(wait)
+
+
+def _target_field(target: Target) -> dict:
+    """Where an input went, so the model knows what to capture to see the result."""
+    return {"windowId": target.id} if target.kind == "window" else {"monitorId": target.id}
+
+
 pointer = Pointer(captures, control)
 viewer = Viewer(captures, control, pointer=pointer)
 
@@ -128,10 +163,13 @@ def list_windows() -> str:
 
 
 @mcp.tool()
-def capture_monitor(monitor_id: int | None = None) -> list[Image | str]:
+def capture_monitor(monitor_id: int | None = None, wait_seconds: float = 0) -> list[Image | str]:
     """Capture a whole monitor of the user's desktop (the primary monitor when monitor_id
     is omitted). Use this when the user asks you to look at their screen or desktop.
+    wait_seconds: wait this long before capturing (0-5, default 0), e.g. after a click for an
+    animation or a tooltip to settle.
     Returns a JPEG and JSON metadata; screen coordinates = origin + image coordinates / scale."""
+    _wait_before_capture(wait_seconds)
     with _reported():
         image, monitor = capture.capture_monitor(monitor_id)
     return _capture_result(
@@ -140,16 +178,20 @@ def capture_monitor(monitor_id: int | None = None) -> list[Image | str]:
 
 
 @mcp.tool()
-def capture_window(window_id: int | None = None, title: str | None = None) -> list[Image | str]:
+def capture_window(
+    window_id: int | None = None, title: str | None = None, wait_seconds: float = 0
+) -> list[Image | str]:
     """Capture one window, even when other windows cover it. Pass exactly one of window_id
     or title (a case-insensitive part of the window title). Try title first; if several
     windows match, the error lists candidates, so retry with window_id. Minimized windows
-    cannot be captured. Returns a JPEG and JSON metadata; screen coordinates = origin +
-    image coordinates / scale."""
+    cannot be captured. wait_seconds: wait this long before capturing (0-5, default 0), e.g.
+    after a click for an animation or a tooltip to settle. Returns a JPEG and JSON metadata;
+    screen coordinates = origin + image coordinates / scale."""
     if (window_id is None) == (title is None):
         raise ToolError("window_id と title のどちらか一方だけを指定してください。")
     if title is not None and not title.strip():
         raise ToolError("title が空です。ウィンドウのタイトルの一部を指定してください。")
+    _wait_before_capture(wait_seconds)
     with _reported():
         if window_id is None:
             window_id = select_window(capture.list_windows(), title).id
@@ -229,47 +271,156 @@ def wait_for_message(timeout_seconds: int = WAIT_DEFAULT_SECONDS) -> list[Image 
     return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
 
 
-@mcp.tool()
-def move_mouse(
-    capture_id: str,
-    x: float,
-    y: float,
-    wait_seconds: float = MOVE_WAIT_DEFAULT_SECONDS,
-    restore_cursor: bool = True,
-) -> list[Image | str]:
-    """Rest the mouse cursor on a point of one of your captures, wait, and capture the same
-    window or monitor again, to read what only appears while the cursor is on something
-    (tooltips, hover text, descriptions of icons). It never clicks. For a window capture it brings that
-    window to the front first; a viewer browser covering a monitor capture is minimized for the
-    moment and put back, and focus returns to the window that had it. It moves the user's real
-    cursor for a moment, so use it when the user is not using the mouse.
+@mcp.tool(structured_output=False)
+def move_mouse(capture_id: str, x: float, y: float) -> str:
+    """Move the mouse cursor to a point of one of your captures and leave it there, to show what
+    only appears while the cursor is on something (tooltips, hover text, descriptions of icons);
+    then capture again to read it (pass wait_seconds to the capture if it takes a moment to
+    appear). It never clicks and needs no permission. For a window capture it brings that window
+    to the front and leaves it there; on a monitor capture, a viewer browser covering the point is
+    minimized and stays down (the next show_annotated brings the page back). It moves the user's
+    real cursor, so use it when the user is not using the mouse.
 
     capture_id: the captureId from a capture's metadata (the latest 20 are kept).
     x, y: the point in that capture's image pixels (imageWidth x imageHeight).
-    wait_seconds: how long the cursor rests before the capture (0-5, default 0.5).
-    restore_cursor: put the cursor back where it was afterwards (default true).
-    Returns a JPEG and JSON metadata like the capture tools, with a new captureId, plus
-    "hover" (the point and the captureId it was on) and "cursorRestored". A window capture
-    shows only that window, so a tooltip drawn as a separate popup appears only in a
-    monitor capture."""
-    wait = max(0.0, min(MOVE_WAIT_MAX_SECONDS, float(wait_seconds)))
+    Returns JSON text, no image: "moved" (the point and the captureId it was on) and "windowId"
+    or "monitorId" (what to capture next). A window capture shows only that window, so a tooltip
+    drawn as a separate popup appears only in a monitor capture."""
     with _reported():
         target = captures.target(capture_id)
-        with pointer.at(capture_id, x, y, keep_clear="capture") as spot:
+        with pointer.at(capture_id, x, y, return_focus=False, restore_browser=False) as spot:
+            inputs.move(*spot.screen)
+    return json.dumps(
+        {"moved": {"x": x, "y": y, "captureId": capture_id}, **_target_field(target)}, ensure_ascii=False
+    )
+
+
+def _ensure_clickable(window_id: int) -> None:
+    """Raise CaptureError unless Claude may click this window: it must still exist, its app must be
+    known (an unknown one could be where Claude Code runs), and it must not be where Claude Code runs
+    or the viewer page itself."""
+    window = next((w for w in capture.list_windows() if w.id == window_id), None)
+    if window is None:
+        raise CaptureError("対象のウィンドウが見つかりません。撮影し直してください。")
+    if not window.app:
+        raise CaptureError("このウィンドウのアプリを確かめられないため、Claude には押させません。ユーザーが押してください。")
+    if window.app.lower() in PROTECTED_APPS or window.title.startswith(VIEWER_TITLE_PREFIX):
+        raise CaptureError(
+            f"このウィンドウ（{window.app}）は Claude には押させません。"
+            "Claude Code が動くアプリと注釈ページは、ユーザーが押してください。"
+        )
+
+
+@mcp.tool(structured_output=False)
+def click(capture_id: str, x: float, y: float, what: str) -> str:
+    """Left-click once on a point of the window the user's viewer page is showing. It works only
+    while the user has turned on "Claude に操作を任せる" on that page, and only for that window (a
+    newer capture of the same window is fine; a monitor capture is not). Showing a different window
+    or a monitor on the page turns the switch off, so the user has to turn it on again for the new
+    window. It presses the user's real screen, so use it only for what the user asked you to do. It
+    cannot right-click or double-click; to drag, use drag; to turn the wheel, use scroll. Windows
+    where Claude Code runs (editors, terminals, the Claude app), windows whose app cannot be
+    identified and the viewer browser are refused: the user presses those. Put what you press in
+    what, and after every click you must tell the user in the chat what you clicked. When the
+    switch is off it returns an error: ask the user to click, or to turn it on. The clicked window
+    stays in front. The cursor rests on the point a moment, then goes back. It does not capture:
+    call capture_window (with wait_seconds for an animation) when you want to see the result.
+
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
+    x, y: the point in that capture's image pixels (imageWidth x imageHeight).
+    what: what you press, 1-60 characters (e.g. "OK ボタン"); it is shown to the user on the page.
+    Returns JSON text, no image: "clicked" (the point, the captureId it was on, and what) and
+    "windowId" (what to capture next)."""
+    what = _short_what(what)
+    target = _operate(capture_id, (x, y), None, lambda spot: inputs.click(*spot.screen), recorded=what)
+    clicked = {"x": x, "y": y, "captureId": capture_id, "what": what}
+    return json.dumps({"clicked": clicked, **_target_field(target)}, ensure_ascii=False)
+
+
+@mcp.tool(structured_output=False)
+def drag(capture_id: str, from_x: float, from_y: float, to_x: float, to_y: float, what: str) -> str:
+    """Left-drag from one point to another on the window the user's viewer page is showing (press
+    on the first point, move to the second in small steps, release there). Use it to move things a
+    hand would drag: a card or an item to another place, a box selection, a zone drawn on a map. It
+    needs the same permission as click ("Claude に操作を任せる" on the page, for that window only) and
+    refuses the same windows; both points must be on that window and not under another one, or
+    nothing is pressed. Put what you drag and where in what, and after every drag you must tell the
+    user in the chat what you dragged. The window stays in front. The cursor rests on the end a
+    moment, then goes back. It does not capture: call capture_window to see the result.
+
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
+    from_x, from_y: where the drag starts, in that capture's image pixels.
+    to_x, to_y: where it ends, in the same image's pixels.
+    what: what you drag and where, 1-60 characters (e.g. "左のジョーカーを右端へ"); it is shown on the page.
+    Returns JSON text, no image: "dragged" (fromX, fromY, toX, toY, the captureId they were on, and
+    what) and "windowId"."""
+    what = _short_what(what)
+    target = _operate(
+        capture_id, (from_x, from_y), (to_x, to_y), lambda spot: inputs.drag(spot.screen, spot.end),
+        recorded=f"{what}（ドラッグ）",
+    )
+    dragged = {"fromX": from_x, "fromY": from_y, "toX": to_x, "toY": to_y, "captureId": capture_id, "what": what}
+    return json.dumps({"dragged": dragged, **_target_field(target)}, ensure_ascii=False)
+
+
+@mcp.tool(structured_output=False)
+def scroll(capture_id: str, x: float, y: float, amount: int, what: str) -> str:
+    """Turn the mouse wheel on a point of the window the user's viewer page is showing: amount
+    notches up (away from the user, usually toward the top of a list) when positive, down when
+    negative. Use it for lists, pages and maps that move with the wheel. The wheel can change
+    things too (a value under the cursor, the zoom of a map), so it needs the same permission as
+    click ("Claude に操作を任せる" on the page, for that window only) and refuses the same windows;
+    the point must be on that window and not under another one. Put what you scroll in what, and
+    after every scroll you must tell the user in the chat what you scrolled. The window stays in
+    front. The cursor rests on the point a moment, then goes back. It does not capture: call
+    capture_window to see the result.
+
+    capture_id: the captureId from a capture's metadata (the latest 20 are kept).
+    x, y: the point in that capture's image pixels (imageWidth x imageHeight).
+    amount: notches to turn, -20 to 20 and not 0 (one notch is one click of a wheel).
+    what: what you scroll, 1-60 characters (e.g. "カードの一覧を下へ"); it is shown on the page.
+    Returns JSON text, no image: "scrolled" (the point, amount, the captureId it was on, and what)
+    and "windowId"."""
+    if amount == 0 or abs(amount) > MAX_SCROLL_NOTCHES:
+        raise ToolError(f"amount は -{MAX_SCROLL_NOTCHES}〜{MAX_SCROLL_NOTCHES} の 0 以外の整数で指定してください。")
+    what = _short_what(what)
+    target = _operate(
+        capture_id, (x, y), None, lambda spot: inputs.scroll(*spot.screen, amount), recorded=f"{what}（スクロール）"
+    )
+    scrolled = {"x": x, "y": y, "amount": amount, "captureId": capture_id, "what": what}
+    return json.dumps({"scrolled": scrolled, **_target_field(target)}, ensure_ascii=False)
+
+
+def _short_what(what: str) -> str:
+    what = what.strip()
+    if not 1 <= len(what) <= MAX_WHAT_CHARS:
+        raise ToolError(f"what に、何を押すかを 1〜{MAX_WHAT_CHARS} 文字で書いてください。")
+    return what
+
+
+def _operate(
+    capture_id: str,
+    point: tuple[float, float],
+    to: tuple[float, float] | None,
+    press: Callable[[Spot], None],
+    recorded: str,
+) -> Target:
+    """What click, drag and scroll share: check the permission and the window, send the input, log
+    it on the page, let the cursor rest on the point a moment and put it back. Returns the target."""
+    with _reported():
+        target = captures.target(capture_id)
+        viewer.authorize_click(capture_id)
+        _ensure_clickable(target.id)
+        with pointer.at(capture_id, *point, return_focus=False, must_hit_target=True, to=to) as spot:
+            viewer.authorize_click(capture_id)  # the user may have switched it off while we got ready
             try:
-                inputs.move(*spot.screen)
-                _sleep(wait)
-                shrunk, meta = _recapture(target)
-            except BaseException:
-                if restore_cursor:
-                    with contextlib.suppress(CaptureError):
-                        inputs.move(*spot.cursor)
-                raise
-            else:
-                if restore_cursor:
+                press(spot)
+                viewer.record_click(recorded)
+                _sleep(AFTER_INPUT_SECONDS)
+            finally:
+                with contextlib.suppress(CaptureError):
                     inputs.move(*spot.cursor)
-    result = {**meta, "hover": {"x": x, "y": y, "captureId": capture_id}, "cursorRestored": restore_cursor}
-    return [Image(data=encode_jpeg(shrunk), format="jpeg"), json.dumps(result, ensure_ascii=False)]
+    return target
 
 
 def main() -> None:

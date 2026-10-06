@@ -31,6 +31,9 @@ class FakeControl:
         self.browser = browser
         self.origin = origin
         self.fail_origin = fail_origin
+        self.front = None  # the window last brought to front
+        self.covered_by = None  # set to make window_at answer another window (an overlap)
+        self.covered_at = {}  # (x, y) -> window: an overlap at one point only
 
     def find_window(self, fragment):
         self.calls.append(("find_window", fragment))
@@ -53,7 +56,15 @@ class FakeControl:
 
     def bring_to_front(self, hwnd):
         self.calls.append(("bring_to_front", hwnd))
+        if self.front_ok:
+            self.front = hwnd
         return self.front_ok
+
+    def window_at(self, x, y):
+        self.calls.append(("window_at", x, y))
+        if (x, y) in self.covered_at:
+            return self.covered_at[(x, y)]
+        return self.front if self.covered_by is None else self.covered_by
 
     def window_origin(self, hwnd):
         self.calls.append(("window_origin", hwnd))
