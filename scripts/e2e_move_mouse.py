@@ -1,8 +1,8 @@
 """Real-machine end-to-end check of move_mouse, run against the real MCP server over stdio.
 
-1. On the primary monitor: capture_window the test window, rest the cursor on its middle,
-   and check the returned image shows the hover color, the window saw the cursor come and
-   go, and the cursor is back where it was.
+1. On the primary monitor: capture_window the test window, move the cursor to its middle,
+   and check move_mouse returns text only (no image), the cursor stays on the window, the
+   window saw it come, and a new capture (with wait_seconds) shows the hover color.
 2. With two or more monitors: the same on a non-primary monitor with capture_monitor.
 
 Opens a small test window (closed at the end). Do not touch the mouse while it runs."""
@@ -60,7 +60,7 @@ def is_hover_color(rgb: tuple[int, int, int]) -> bool:
 async def check(client: Client, lines: queue.Queue, tool: str, arguments: dict, point_of) -> None:
     window = target_window()
     assert window is not None, "test window not found"
-    away = (window.x - 40, window.y - 40)  # just outside the window, so the hover must start and end
+    away = (window.x - 40, window.y - 40)  # just outside the window, so the hover must start
     control.set_cursor(*away)
     latest(lines, 0.5)
 
@@ -69,17 +69,24 @@ async def check(client: Client, lines: queue.Queue, tool: str, arguments: dict, 
     x, y = point_of(meta, window, 0.5)
     result = await client.call_tool("move_mouse", {"capture_id": meta["captureId"], "x": x, "y": y})
     assert not result.is_error, result.content[0].text
-    hover_meta = json.loads(result.content[1].text)
-    image = Image.open(io.BytesIO(base64.b64decode(result.content[0].data))).convert("RGB")
+    assert [item.type for item in result.content] == ["text"], [item.type for item in result.content]
+    moved = json.loads(result.content[0].text)
+    again = await client.call_tool(tool, {**arguments, "wait_seconds": 0.5})
+    assert not again.is_error, again.content[0].text
+    image = Image.open(io.BytesIO(base64.b64decode(again.content[0].data))).convert("RGB")
     sample_x, sample_y = point_of(meta, window, 0.15)
     pixel = image.getpixel((round(sample_x), round(sample_y)))
     state = latest(lines, 1.0)
-    print(tool, "->", hover_meta["captureId"], "pixel", pixel, "state", state, "cursor", control.cursor_pos())
-    assert is_hover_color(pixel), f"the capture does not show the hover color: {pixel}"
-    assert state.get("enter", 0) >= 1 and state.get("leave", 0) >= 1, state
-    assert state.get("single", 0) == 0 and state.get("double", 0) == 0, state
-    assert control.cursor_pos() == away, (control.cursor_pos(), away)
-    assert hover_meta["cursorRestored"] is True
+    cursor = control.cursor_pos()
+    print(tool, "->", moved, "pixel", pixel, "state", state, "cursor", cursor)
+    try:
+        assert is_hover_color(pixel), f"the capture does not show the hover color: {pixel}"
+        assert state.get("enter", 0) >= 1, state
+        assert state.get("single", 0) == 0 and state.get("double", 0) == 0, state
+        assert window.x <= cursor[0] < window.x + window.width, (cursor, window)
+        assert window.y <= cursor[1] < window.y + window.height, (cursor, window)
+    finally:
+        control.set_cursor(*away)  # move_mouse leaves the cursor on the point; tidy up
 
 
 def window_middle(meta: dict, window, fraction: float = 0.5) -> tuple[float, float]:

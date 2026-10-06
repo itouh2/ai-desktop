@@ -1,4 +1,4 @@
-"""A harmless window for manual and end-to-end tests: counts clicks, double-clicks and hovers.
+"""A harmless window for manual and end-to-end tests: counts clicks, double-clicks, hovers and wheel notches.
 
 Turns yellow while the cursor is on it. Every change is also printed to stdout as one JSON
 line, so test scripts can read it. An optional first argument sets the tkinter geometry."""
@@ -15,7 +15,7 @@ HOVER_COLOR = "#ffe066"
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    counts = {"single": 0, "double": 0, "enter": 0, "leave": 0}
+    counts = {"single": 0, "double": 0, "enter": 0, "leave": 0, "wheel": 0}
     root = tk.Tk()
     root.title(TITLE)
     root.geometry(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_GEOMETRY)
@@ -25,7 +25,7 @@ def main() -> None:
     def show() -> None:
         label.config(
             text=f"クリック: {counts['single']}\nダブルクリック: {counts['double']}\n"
-            f"ホバー: {counts['enter']} / {counts['leave']}"
+            f"ホバー: {counts['enter']} / {counts['leave']}\nホイール: {counts['wheel']}"
         )
         print(json.dumps(counts), flush=True)
 
@@ -42,6 +42,12 @@ def main() -> None:
     label.bind("<Double-Button-1>", count("double"))
     label.bind("<Enter>", count("enter", HOVER_COLOR))
     label.bind("<Leave>", count("leave", IDLE_COLOR))
+
+    def wheel(event: tk.Event) -> None:
+        counts["wheel"] += round(event.delta / 120)  # one notch is 120; up is positive
+        show()
+
+    root.bind_all("<MouseWheel>", wheel)
     show()
     root.mainloop()
 

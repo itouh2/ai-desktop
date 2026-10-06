@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from ai_desktop.annotate import VIEWER_TITLE_PREFIX
 from ai_desktop.captures import CaptureStore
@@ -56,17 +56,18 @@ class Pointer:
         capture_id: str,
         x: float,
         y: float,
-        keep_clear: Literal["point", "capture"],
         return_focus: bool = True,
         must_hit_target: bool = False,
         to: tuple[float, float] | None = None,
+        restore_browser: bool = True,
     ) -> Iterator[Spot]:
         """Get ready to operate at (x, y) of the capture and yield where that is on screen.
 
-        keep_clear="point" minimizes a browser covering the point; "capture" minimizes one
-        overlapping the captured area. A browser minimized here comes back afterwards and focus
-        returns to the window that had it; the cursor is left to the caller. When return_focus=False,
-        the previous foreground window is not restored (a window target stays in front).
+        On a monitor capture, a viewer browser covering the point is minimized. It comes back
+        afterwards unless restore_browser=False (for a cursor left on the point, which the browser
+        would cover again), and focus returns to the window that had it; the cursor is left to the
+        caller. When return_focus=False, the previous foreground window is not restored (a window
+        target stays in front).
         must_hit_target=True refuses a window target unless that window is the top-level window at
         the point once it is in front, so an operation never lands on a window over it or, when the
         window got smaller than the capture, on what is behind it. to is the end point of a drag on
@@ -102,7 +103,7 @@ class Pointer:
                     self._control.window_at(*point) != target.id for point in screens
                 ):
                     raise CaptureError(COVERED_MESSAGE)
-                if browser is not None and target.kind == "monitor" and self._in_the_way(browser, screen, meta, keep_clear):
+                if browser is not None and target.kind == "monitor" and self._covers(browser, screen):
                     self._control.minimize(browser)
                     minimized = True
                     time.sleep(self._settle_seconds)
@@ -110,18 +111,14 @@ class Pointer:
                         raise CaptureError("ブラウザを最小化できなかったため、操作しませんでした。")
                 yield Spot(screen=screen, cursor=cursor, end=screens[1] if to is not None else None)
             finally:
-                if minimized:
+                if minimized and restore_browser:
                     self._control.restore(browser)
                 if return_focus and previous and not (minimized and previous == browser):
                     self._control.restore(previous)
         finally:
             self.lock.release()
 
-    def _in_the_way(self, browser: Any, screen: tuple[int, int], meta: dict, keep_clear: str) -> bool:
+    def _covers(self, browser: Any, screen: tuple[int, int]) -> bool:
         left, top, right, bottom = self._control.window_rect(browser)
-        if keep_clear == "point":
-            screen_x, screen_y = screen
-            return left <= screen_x < right and top <= screen_y < bottom
-        m_left, m_top = meta["originX"], meta["originY"]
-        m_right, m_bottom = m_left + meta["originalWidth"], m_top + meta["originalHeight"]
-        return left < m_right and m_left < right and top < m_bottom and m_top < bottom
+        screen_x, screen_y = screen
+        return left <= screen_x < right and top <= screen_y < bottom

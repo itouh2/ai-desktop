@@ -115,6 +115,27 @@ def test_drag_releases_the_button_when_a_move_fails(monkeypatch, sleeps):
     assert sent[-1][2] == inputs.MOUSEEVENTF_LEFTUP
 
 
+def test_scroll_rests_on_the_point_then_turns_the_wheel_one_notch_at_a_time(user32, sleeps):
+    # Games read the wheel once a frame, so the notches go out a little apart instead of in one event.
+    inputs.scroll(100, 200, 3)
+    events = [event.u.mi for batch in user32.batches for event in batch]
+    assert [event.dwFlags for event in events] == [MOVE_FLAGS] + [MOVE_FLAGS | inputs.MOUSEEVENTF_WHEEL] * 3
+    assert [event.mouseData for event in events[1:]] == [inputs.WHEEL_DELTA] * 3
+    assert sleeps == [inputs.HOVER_SECONDS] + [inputs.WHEEL_STEP_SECONDS] * 3
+
+
+def test_scroll_down_sends_negative_notches(user32, sleeps):
+    inputs.scroll(100, 200, -2)
+    wheel = [event.u.mi for batch in user32.batches for event in batch][1:]
+    assert len(wheel) == 2
+    # mouseData is a DWORD; -120 goes out as its two's complement
+    assert all(ctypes_signed(event.mouseData) == -inputs.WHEEL_DELTA for event in wheel)
+
+
+def ctypes_signed(value: int) -> int:
+    return value - (1 << 32) if value >= 1 << 31 else value
+
+
 def test_tap_alt_presses_and_releases_alt(user32):
     inputs.tap_alt()
     down, up = user32.batches[0]

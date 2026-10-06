@@ -14,6 +14,7 @@ KEYEVENTF_KEYUP = 0x0002
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_VIRTUALDESK = 0x4000
 MOUSEEVENTF_ABSOLUTE = 0x8000
 SM_XVIRTUALSCREEN = 76
@@ -26,6 +27,8 @@ HOVER_SECONDS = 0.1  # the cursor rests on the point this long before the press
 PRESS_SECONDS = 0.05  # the button stays down this long
 DRAG_STEPS = 20  # a drag travels in this many moves
 DRAG_STEP_SECONDS = 0.025  # between the moves of a drag (a 60 fps frame is about 0.017 s)
+WHEEL_DELTA = 120  # one notch of the wheel
+WHEEL_STEP_SECONDS = 0.05  # between the notches of a scroll
 _sleep = time.sleep  # replaced in tests
 
 
@@ -112,6 +115,21 @@ def drag(start: tuple[int, int], end: tuple[int, int]) -> None:
         _send(_mouse_at(*end, MOUSEEVENTF_LEFTUP))
 
 
+def scroll(x: int, y: int, notches: int) -> None:
+    """Turn the wheel at physical screen coordinates: notches up (away from the user) when positive,
+    down when negative.
+
+    The cursor rests on the point first, as in click, because the wheel goes to what is under the
+    cursor; the notches go out one at a time a little apart, so a game that reads the wheel once a
+    frame does not merge or drop them."""
+    _send(_mouse_at(x, y, 0))
+    _sleep(HOVER_SECONDS)
+    delta = WHEEL_DELTA if notches > 0 else -WHEEL_DELTA
+    for _ in range(abs(notches)):
+        _send(_mouse_at(x, y, MOUSEEVENTF_WHEEL, delta))
+        _sleep(WHEEL_STEP_SECONDS)
+
+
 def _press(x: int, y: int) -> None:
     _send(_mouse_at(x, y, MOUSEEVENTF_LEFTDOWN))
     _sleep(PRESS_SECONDS)
@@ -123,8 +141,9 @@ def tap_alt() -> None:
     _send(_key(VK_MENU), _key(VK_MENU, up=True))
 
 
-def _mouse_at(x: int, y: int, flags: int) -> INPUT:
-    """A mouse event at (x, y), normalized to 0..65535 across the virtual desktop."""
+def _mouse_at(x: int, y: int, flags: int, data: int = 0) -> INPUT:
+    """A mouse event at (x, y), normalized to 0..65535 across the virtual desktop. data is the
+    wheel movement for MOUSEEVENTF_WHEEL (negative for down)."""
     left = _user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
     top = _user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
     width = _user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
@@ -133,7 +152,7 @@ def _mouse_at(x: int, y: int, flags: int) -> INPUT:
     event.u.mi = MOUSEINPUT(
         round((x - left) * 65535 / max(1, width - 1)),
         round((y - top) * 65535 / max(1, height - 1)),
-        0,
+        data & 0xFFFFFFFF,  # mouseData is a DWORD: a negative wheel delta goes as its two's complement
         flags | MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
         0,
         0,

@@ -347,7 +347,7 @@ class Viewer:
 
     def perform_click(self, capture_id: str, x: float, y: float, double: bool) -> None:
         """Click the real screen where (x, y) is on the capture. The page is left as it is."""
-        with self._pointer.at(capture_id, x, y, keep_clear="point") as spot:
+        with self._pointer.at(capture_id, x, y) as spot:
             try:
                 self._control.click(*spot.screen, double)
                 time.sleep(self._after_click_seconds)

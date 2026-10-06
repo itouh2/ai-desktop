@@ -1,4 +1,4 @@
-"""Real-machine end-to-end check of click, run against the real MCP server over stdio.
+"""Real-machine end-to-end check of click and scroll, run against the real MCP server over stdio.
 
 1. capture_window the test window and show it with show_annotated (this opens a browser tab,
    which must stay open: the permission turns off when no page tab is connected).
@@ -7,8 +7,10 @@
 3. With it on (POST /agent {"enabled": true, "target": "window:<id>"}, naming the shown window
    as the page does), the same click presses the middle of the window exactly once (no
    double-click), leaves the window in front and puts the cursor back where it was, and returns
-   what was pressed.
-4. Turns the permission off again and closes the test window.
+   what was pressed as text (no image: the tools that press do not capture).
+4. Still on, scroll turns the wheel 3 notches down and then 2 up over the window, and the window
+   counts exactly those notches.
+5. Turns the permission off again and closes the test window.
 
 Opens one browser tab and a small test window (closed at the end). Do not touch the mouse while
 it runs."""
@@ -33,7 +35,7 @@ from ai_desktop import capture, control  # noqa: E402
 
 GEOMETRY = "520x320+240+240"
 WHAT = "試験用ウィンドウの中央"
-NO_CLICKS = {"single": 0, "double": 0, "enter": 0, "leave": 0}
+NO_CLICKS = {"single": 0, "double": 0, "enter": 0, "leave": 0, "wheel": 0}
 
 
 def start_target(geometry: str) -> tuple[subprocess.Popen, queue.Queue]:
@@ -106,8 +108,8 @@ async def run(lines: queue.Queue) -> None:
             await set_agent(url, True, window.id)
             result = await client.call_tool("click", {"capture_id": capture_id, "x": center[0], "y": center[1], "what": WHAT})
             assert not result.is_error, result.content[0].text
-            assert result.content[0].type == "image", result.content[0].type
-            clicked = json.loads(result.content[1].text)
+            assert [item.type for item in result.content] == ["text"], [item.type for item in result.content]
+            clicked = json.loads(result.content[0].text)
             state = await asyncio.to_thread(latest, lines, 1.0, state)
             print("switch on:", clicked["clicked"], "state", state, "cursor", control.cursor_pos())
             assert state["single"] == before["single"] + 1, f"expected exactly one click: {before} -> {state}"
@@ -116,6 +118,20 @@ async def run(lines: queue.Queue) -> None:
             assert control.cursor_pos() == away, (control.cursor_pos(), away)
             assert clicked["clicked"]["what"] == WHAT, clicked["clicked"]
             assert clicked["clicked"]["captureId"] == capture_id, clicked["clicked"]
+            assert clicked["windowId"] == window.id, clicked
+
+            for amount in (-3, 2):
+                wheel_before = state["wheel"]
+                result = await client.call_tool(
+                    "scroll", {"capture_id": capture_id, "x": center[0], "y": center[1], "amount": amount, "what": "試験用ウィンドウでホイール"}
+                )
+                assert not result.is_error, result.content[0].text
+                scrolled = json.loads(result.content[0].text)
+                state = await asyncio.to_thread(latest, lines, 1.0, state)
+                print("scroll:", scrolled["scrolled"], "state", state, "cursor", control.cursor_pos())
+                assert state["wheel"] == wheel_before + amount, f"expected {amount} notches: {wheel_before} -> {state}"
+                assert state["single"] == before["single"] + 1, f"scroll must not click: {state}"
+                assert control.cursor_pos() == away, (control.cursor_pos(), away)
         finally:
             try:
                 await set_agent(url, False, window.id)  # leave the permission off however the checks went
